@@ -9,7 +9,7 @@
 | 输出 | 内容 | 必须满足 |
 |---|---|---|
 | LeRobot v3 实体数据集 | 数值 Parquet、元数据；可选 RGB MP4 | 第2–6节 |
-| 原生异频引用包 | selection、原生 token 引用、clock/profile、checksum；payload 留在源位置 | 第2、7、8节 |
+| 原生异频引用包 | selection、原生 token 引用、clock/profile、checksum；payload 留在源位置 | 第2、7节 |
 | 引用演练包、prepared 数值、兼容性输出 | 调试、准备或对照产物 | 明示范围与限制，不得仅凭生成成功标为正式训练数据 |
 
 LeRobot 当前采用 `lerobot-v3-export-v1`、`codebase_version=v3.0`，位姿为 `state-action-ee-pose-v2`；RGB 为 `video-serving-v1`；原生引用包为 `native-temporal-package-v1`。
@@ -158,16 +158,7 @@ Depth、tactile、audio 均不保存，任何输出都不包含这三类模态�
 
 ## 6. LeRobot family、文件与结构
 
-### 6.1 Family 与计划
-
-- 一次 export 只消费一个 homogeneous family：字段/dtype/shape、EE/手部布局、标签模式、frame/model family、夹爪/closure校准、坐标 profile、相机集合、各流 native FPS 与媒体兼容参数一致。license 不参与 family 划分。
-- 当前实体 exporter 的 `fps` 为正整数；numeric `timestamp[i]` 须已满足 native anchor `i/fps`（容差0.0001秒），不是由 exporter 重采样得到。带视频时各 camera 的帧率/episode 帧数须与该 family 匹配。
-- 因此异频 numeric/video、非整数 FPS 或不受支持 VFR 不能通过改 `info.fps`、复制/drop 帧强塞进当前实体路线；使用原生引用包或已验证的专用路线。action-anchor 中关联的 state 不代表独立 state 流的全量样本。
-- Candidate 逐 episode 登记 source/revision、schema family、numeric bytes/rows、每 camera bytes/frames/native frequency，以及 mapping/repair/window revision。request 中 source/episode 不重复、task 非空、实际行数等于声明值，camera URI 集合与 features 完全相同。
-- 当前实体 exporter 输入为绝对本地 `file://` URI；包含视频时绑定实际 media validation revision/evidence。必需输入均可读且 checksum 与证据一致。
-- 使用分片计划时 request 的 dataset/view/plan/family 和 episode 集合须精确匹配；严格执行 planner 的 shard path、row/frame offset，不得改顺序或遗漏。分片 byte/row/frame 预算由 plan 声明，不是所有输出固定尺寸。
-
-### 6.2 交付布局与一致性
+### 6.1 交付布局与一致性
 
 ```text
 <family>/
@@ -202,14 +193,3 @@ Depth、tactile、audio 均不保存，任何输出都不包含这三类模态�
 当前 compiler 输入预算为 selection 最多10000行、token index 最多200万行、gate ledger 最多10万行；每窗口最多2000查询槽位，超限先分区。选择窗口按半开区间 `[start,end)` 保留真实 token。包依赖原 payload 可访问，不能称为脱离源挂载的媒体包。
 
 reader 必须验证 package identity、预期 gate revision、文件和所引用 payload checksum；直接 Parquet 和明确 `kind=rgb_video` 的资产才走对应通用 resolver。archive member、未知媒体使用已验证专用 reader，不走 RGB 解码。
-
-## 8. 训练读取条件
-
-本节适用于引用包以及 LeRobot 导出之上的训练查询适配，不改变落盘频率。
-
-- profile 可用默认数值100/1Hz、视觉30/1Hz查询网格，以整数纳秒有理数计算；它们是请求频率，不是实际观测频率。
-- `exact` 仅命中同一时刻；`nearest_before_with_tolerance` 仅命中真实历史样本，`max_age_ns` 与 `max_gap_ns` 共同限制年龄，不能自动放宽。
-- 返回 `query_time_ns`、`source_timestamp_ns`、`token_id`、`age_ns`、`valid`、`is_reused`、`fresh_mask`、`supervision_mask`；freshness 相对同一网格上一槽位定义，与 shuffle/worker/访问顺序无关。
-- target 只有真实 token 首次命中的槽位可有监督；最终 loss mask 还须与 component mask 相交。重复引用不是新增观测；跨重叠窗口采样权重由训练配置负责。
-- observation 不越过 cutoff，target 不跨 selection/window；相对 action 的 base-state 和真实 horizon 保留，不能将100ms标签解释成10ms目标。
-- batch 不混合不兼容 export/字段 schema，padding 为 false mask。token-level valid 不替代原 payload 的逐分量 mask、动作来源、frame 或 horizon。
