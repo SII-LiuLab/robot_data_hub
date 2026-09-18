@@ -30,7 +30,7 @@ LeRobot 当前采用 `lerobot-v3-export-v1`、`codebase_version=v3.0`，位姿�
 
 ### 2.2 时间、缺测与真实样本
 
-- 每个 vision/proprio/state/action/audio 流保留 native frequency、真实 source timestamp 和 clock 身份。未知时间单位或 clock 关系必须显式未知，不凭数量级、行号、同 FPS 或相近时间猜测。
+- 每个 vision/proprio/state/action 流保留 native frequency、真实 source timestamp 和 clock 身份。未知时间单位或 clock 关系必须显式未知，不凭数量级、行号、同 FPS 或相近时间猜测。
 - query time 只作 anchor。禁止插值、重采样、升降频、复制/drop frame 凑频率，或无限 hold-last 制造同步；选择删除片段不属于凑频率，但保留窗口必须有真实范围且不跨删除边界。
 - 观测关联只允许同 episode、已验证 clock 下的真实历史样本，并受明确容差约束；返回实际时间及 age/gap。无历史记录、超容差、原生无效或 clock 未绑定时为缺测，不跳过坏点寻找更旧有效值。
 - mask 必须为明确的布尔值并匹配对应分量/末端/通道；零占位不能作为有效监督，真实零值也不能当作缺测。无效 pose 占位仍须有限，不能用 NaN/Inf 隐藏错误。
@@ -152,22 +152,19 @@ closure 只表示该校准下的开放/闭合程度，不替代6维动作或物�
 | 时间 | native rational FPS、passthrough；track timescale 90000，记录实际 time base 和源→输出 PTS 映射 |
 | 分辨率 | 保持宽高比、不裁剪、不上采样、偶数宽高；长边≤1280保持原尺寸，否则按比例缩至1280，记录 Lanczos 等实际 filter/version |
 | 色彩 | 保留/记录 color range、space、primaries、transfer；未知时规范默认 bt709/tv，不能将默认值称为观测证据 |
-| 音轨 | camera MP4 去除 audio；需要音频时单列 stream |
+| 音轨 | camera MP4 不含音轨；音频不导出，见 5.2 |
 
 合规输入优先 remux；不合规输入只能生成独立 derived 媒体。硬件 encoder 或不同 tuning 必须有独立 encoder revision、参数语义和完整质量/seek/decoder 验证，不能把 CQ/QP 写成 CRF。
 
 - 只物化真实连续 frame window，保留 source FPS、frame count 和每帧时间对应。VFR 保留真实时间并标 `fps_mode=vfr`；目标格式不支持则留在原生 reader，不能强转 CFR。
-- 完整解码检查 codec/profile/pix_fmt、FPS、分辨率、PTS 单调/重复/gap、帧数、duration、GOP/B帧、faststart、音轨、decode error 和随机 seek。截断 decode 的结果不能成为最终路由或发布证据。
-- 同一 camera feature 的拼接输入须一致：codec、profile、pix_fmt、分辨率、rational FPS、color metadata、audio policy。LeRobot concat 只 copy packet，不再有损编码；拼接后再次核对帧数、offset 和解码。
+- 完整解码检查 codec/profile/pix_fmt、FPS、分辨率、PTS 单调/重复/gap、帧数、duration、GOP/B帧、faststart、无音轨、decode error 和随机 seek。截断 decode 的结果不能成为最终路由或发布证据。
+- 同一 camera feature 的拼接输入须一致：codec、profile、pix_fmt、分辨率、rational FPS、color metadata。LeRobot concat 只 copy packet，不再有损编码；拼接后再次核对帧数、offset 和解码。
 - 共享视频保留 full-asset gate 和各 episode window reference；不能只验证一个窗口却为整个 shard 背书。MCAP 视频只接受已验证的 `foxglove.CompressedVideo` H.264/H.265 payload。
-- 每个 asset/shard 记录源 URI/id/revision/checksum/size/mtime、episode/camera/role/attached EE、标定引用及已知范围、源编码/色彩/尺寸/FPS/time base/PTS/帧数；记录 encoder/build/config、缩放与音频策略、job、plan/family/shard revision、输出 checksum、时间残差和验证结果。许可信息仅可选 provenance。
+- 每个 asset/shard 记录源 URI/id/revision/checksum/size/mtime、episode/camera/role/attached EE、标定引用及已知范围、源编码/色彩/尺寸/FPS/time base/PTS/帧数；记录 encoder/build/config、缩放策略、job、plan/family/shard revision、输出 checksum、时间残差和验证结果。许可信息仅可选 provenance。
 
 ### 5.2 Depth、tactile、audio
 
-- Depth 独立于 RGB：优先引用原 Z16/PNG/MKV 等无损资产；需要派生 serving 时按12-bit quantization、`gray12le`、HEVC Main12、默认 lossless 契约执行。记录 bit depth、unit、min/max、linear/log、量化、invalid/zero、饱和比例；禁止8-bit H.264。低于10-bit或有界 decode 不能作为最终 depth gate。
-- RGB tactile 可按相应 RGB role 编码；非 RGB tactile 保持独立 native stream。
-- 启用 audio 时独立保存，优先源编码或无损 FLAC；保留 sample rate/channels/sample format/timestamp，不重采样、downmix、默认响度归一化或静音补缺。缺测使用 mask；相关 consent/PII 检查独立于编码检查。
-- 专用模态没有受验证 reader/export contract 时保留原生引用，不能通过 RGB decoder 或声称已获 LeRobot RGB 路线支持。
+Depth、tactile、audio 均不保存，任何输出都不包含这三类模态。
 
 ## 6. LeRobot family、文件与结构
 
@@ -214,7 +211,7 @@ closure 只表示该校准下的开放/闭合程度，不替代6维动作或物�
 输出为 `selection.parquet`、去重 `native_tokens.parquet`、`config.json`、`package.json`；manifest 绑定 inputs、gate/token-index/accepted-selection revision、文件 checksum、package revision 和实际覆盖范围，标明 `media_storage=external_reference`、`resampled=false`、`training_approval_created=false`。
 当前 compiler 输入预算为 selection 最多10000行、token index 最多200万行、gate ledger 最多10万行；每窗口最多2000查询槽位，超限先分区。选择窗口按半开区间 `[start,end)` 保留真实 token。包依赖原 payload 可访问，不能称为脱离源挂载的媒体包。
 
-reader 必须验证 package identity、预期 gate revision、文件和所引用 payload checksum；直接 Parquet 和明确 `kind=rgb_video` 的资产才走对应通用 resolver。depth、archive member、未知媒体使用已验证专用 reader，不走 RGB 解码。
+reader 必须验证 package identity、预期 gate revision、文件和所引用 payload checksum；直接 Parquet 和明确 `kind=rgb_video` 的资产才走对应通用 resolver。archive member、未知媒体使用已验证专用 reader，不走 RGB 解码。
 
 ## 8. 训练读取条件
 
