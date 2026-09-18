@@ -18,17 +18,7 @@ LeRobot 当前采用 `lerobot-v3-export-v1`、`codebase_version=v3.0`，位姿�
 
 ## 2. 所有输出的共同条件
 
-### 2.1 来源、范围与存储
-
-- 仅消费 active source registry 和显式 selection/window。RoboPro、AgiBot2026 的非 `ImitationLearning/` 域、GenRobot 纯 Ego 及 `/sim/` 内容不得进入训练输出。
-- 原始文件不可修改、删除或覆盖；所有输出、cache、canonical、derived、临时文件只能写入配置允许的工作目录，禁止写入 `/inspire/dataset`，路径解析后仍须在允许范围内。
-- JSON 保存契约、配置、manifest 和 summary；Parquet 保存数值、索引、QC 和 selection。控制面及 Training View 只引用媒体 URI；仅显式物化/实体导出可生成媒体，不为每个 View 重复编码。
-- 每条轨迹/窗口可追溯到 `source_id`、不可变 `source_revision`、`episode_id`、原始 URI/checksum 和实际 token/row/frame 范围；来源相同不代表所有 schema、机器人或工具变体可共用证据。
-- 绑定实际使用的 dataset/catalog、selection/view、native window、mapping、normalization、repair、模型/标定、媒体验证、plan/export revision。未使用的可选环节可为空，必需证据不得以占位 revision 代替。
-- 重跑生成新版本；仅在输入、执行 revision、计数和 SHA-256 全部一致时恢复 checkpoint。文件存在或行数相同不构成恢复依据；临时输出完成校验后原子发布。
-- Archive 引用保留 archive/member 身份、checksum 及可用的 offset/size；bare tar 使用已验证 range，tar.gz 使用有界 cache，未经确认可 seek 的 tar.zst 不得伪装随机读取。不能在 raw 下解包。
-
-### 2.2 时间、缺测与真实样本
+### 2.1 时间、缺测与真实样本
 
 - 每个 vision/proprio/state/action 流保留 native frequency、真实 source timestamp 和 clock 身份。未知时间单位或 clock 关系必须显式未知，不凭数量级、行号、同 FPS 或相近时间猜测。
 - query time 只作 anchor。禁止插值、重采样、升降频、复制/drop frame 凑频率，或无限 hold-last 制造同步；选择删除片段不属于凑频率，但保留窗口必须有真实范围且不跨删除边界。
