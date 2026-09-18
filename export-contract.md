@@ -8,17 +8,27 @@
 
 | 输出 | 内容 | 必须满足 |
 |---|---|---|
-| LeRobot v3 实体数据集 | 数值 Parquet、元数据；可选 RGB MP4 | 第2–6节 |
+| 实体数据集 | 数值 Parquet、元数据；可选 RGB MP4 | 第2–6节 |
 | 原生异频引用包 | selection、原生 token 引用、clock/profile、checksum；payload 留在源位置 | 第2、7节 |
 | 引用演练包、prepared 数值、兼容性输出 | 调试、准备或对照产物 | 明示范围与限制，不得仅凭生成成功标为正式训练数据 |
 
-LeRobot 当前采用 `lerobot-v3-export-v1`、`codebase_version=v3.0`，位姿为 `state-action-ee-pose-v2`；RGB 为 `video-serving-v1`；原生引用包为 `native-temporal-package-v1`。
+位姿规格为 `state-action-ee-pose-v2`；RGB 为 `video-serving-v1`；原生引用包为 `native-temporal-package-v1`。
 
 `numeric-only` 是合法的数值输出范围，不含视频；不得从 raw 临时补视频后声称它是已导出的媒体。是否可发布仍由目标用途要求的证据决定。
 
 ## 2. 所有输出的共同条件
 
-### 2.1 时间、缺测与真实样本
+### 2.1 单一时间模型：共享时钟 + 纯异步记录
+
+数据采用**每样本时间戳**的形式：**全部流共享同一条权威时钟**，每个模态按自己的节拍**独立、异步**地记录，每个样本携带自己的真实时间戳。没有恒定帧率，没有逐帧对齐的行，没有全局帧号。
+
+因此“所有模态帧率相同”与“各模态帧率不同”都只是采样间隔形态的退化情形。本文只有一个时间模型，**不按来源分叉**。
+
+- 由均匀网格转为逐样本时间戳**无损**：按声明帧率赋时间戳并保留有理帧率与样本序号即可精确还原，不需要插值。
+- 任何回归均匀网格的转换**有损**，必须以派生视图交付。
+- **全局帧率不是数据的属性。** 每流的频率是各自的派生统计量，不得用于重建时间。
+
+### 2.2 时间、缺测与真实样本
 
 - 每个 vision/proprio/state/action 流保留 native frequency、真实 source timestamp 和 clock 身份。未知时间单位或 clock 关系必须显式未知，不凭数量级、行号、同 FPS 或相近时间猜测。
 - query time 只作 anchor。禁止插值、重采样、升降频、复制/drop frame 凑频率，或无限 hold-last 制造同步；选择删除片段不属于凑频率，但保留窗口必须有真实范围且不跨删除边界。
@@ -27,7 +37,7 @@ LeRobot 当前采用 `lerobot-v3-export-v1`、`codebase_version=v3.0`，位姿�
 - 稀疏流使用自己的 index/timestamp，不能按 dense row 下标配对。整数纳秒时间不得经过浮点秒重建；浏览器传输 epoch 纳秒使用字符串以保留精度。
 - 时间倒退进入复核，不能自动修复；允许的确定性 duplicate epsilon shift/frame resequence 只能作为保留原时间和证据的独立 overlay，应用后重新验证。
 
-## 3. LeRobot 数值字段
+## 3. 数值字段
 
 设 `N=len(ee_ids)`，`S` 为主 state 宽度，`A` 为主 action 宽度。EE 顺序由元数据明确给出，不交换左右手，不强制所有来源具有同样维度。
 
@@ -52,7 +62,7 @@ LeRobot 当前采用 `lerobot-v3-export-v1`、`codebase_version=v3.0`，位姿�
 | `observation.ee_pose_origin`、`action.ee_pose_origin` | `[N]`，`int64` | `0`不可用、`1`原生记录、`2` FK；无效 pose 必须为0 |
 | `observation.ee_pose_timestamp_ns`、`action.ee_pose_timestamp_ns` | `[N]`，`int64` | 各自真实源时刻；有效值非负且不得倒退 |
 | `observation.state_valid_mask`、`action_valid_mask` | `[S]`、`[A]`，`bool` | 与主向量等宽，pose 切片有效性与对应 EE 一致 |
-| `timestamp` | `[1]`，`float32` | episode 内 LeRobot 相对秒；不能替代整数源时间戳 |
+| `timestamp` | `[1]`，`float32` | episode 内相对秒；不能替代整数源时间戳 |
 | `frame_index`、`episode_index`、`index`、`task_index` | `[1]`，`int64` | 分别为 episode 内帧号、episode 编号、全局行号、任务索引 |
 
 shape `[1]` 在实际 Parquet 中可为标量。源 anchor 的整数时间及其他监督 mask 必须作为显式 feature 保留，不能在列选择时丢弃。
@@ -100,7 +110,7 @@ shape `[1]` 在实际 Parquet 中可为标量。源 anchor 的整数时间及其
 ### 4.2 ActionNet 灵巧手
 
 保留每手6维原生关节与单位，顺序为 `pinky, ring, middle, index, thumb_pitch, thumb_yaw`，不当标量夹爪归一化。
-该来源 LeRobot 数值准备须绑定 hand-closure 校准配置、revision 和 SHA-256，并导出：
+该来源数值准备须绑定 hand-closure 校准配置、revision 和 SHA-256，并导出：
 
 ```text
 observation.left_hand_closure    observation.right_hand_closure
@@ -148,7 +158,7 @@ closure 只表示该校准下的开放/闭合程度，不替代6维动作或物�
 
 - 只物化真实连续 frame window，保留 source FPS、frame count 和每帧时间对应。VFR 保留真实时间并标 `fps_mode=vfr`；目标格式不支持则留在原生 reader，不能强转 CFR。
 - 完整解码检查 codec/profile/pix_fmt、FPS、分辨率、PTS 单调/重复/gap、帧数、duration、GOP/B帧、faststart、无音轨、decode error 和随机 seek。截断 decode 的结果不能成为最终路由或发布证据。
-- 同一 camera feature 的拼接输入须一致：codec、profile、pix_fmt、分辨率、rational FPS、color metadata。LeRobot concat 只 copy packet，不再有损编码；拼接后再次核对帧数、offset 和解码。
+- 同一 camera feature 的拼接输入须一致：codec、profile、pix_fmt、分辨率、rational FPS、color metadata。拼接只 copy packet，不再有损编码；拼接后再次核对帧数、offset 和解码。
 - 共享视频保留 full-asset gate 和各 episode window reference；不能只验证一个窗口却为整个 shard 背书。MCAP 视频只接受已验证的 `foxglove.CompressedVideo` H.264/H.265 payload。
 - 每个 asset/shard 记录源 URI/id/revision/checksum/size/mtime、episode/camera/role/attached EE、标定引用及已知范围、源编码/色彩/尺寸/FPS/time base/PTS/帧数；记录 encoder/build/config、缩放策略、job、plan/family/shard revision、输出 checksum、时间残差和验证结果。许可信息仅可选 provenance。
 
@@ -156,7 +166,7 @@ closure 只表示该校准下的开放/闭合程度，不替代6维动作或物�
 
 Depth、tactile、audio 均不保存，任何输出都不包含这三类模态。
 
-## 6. LeRobot family、文件与结构
+## 6. 文件与结构
 
 ### 6.1 交付布局与一致性
 
@@ -171,7 +181,7 @@ Depth、tactile、audio 均不保存，任何输出都不包含这三类模态�
 └── export_manifest.json
 ```
 
-- `info.json` 声明 `codebase_version=v3.0`、真实 FPS、features 的 dtype/shape/语义、数据路径、episode/frame/task 总数和 split。当前空 `stats.json` 不代表已计算归一化统计；`train` 标签不代表无泄漏或专家认证。
+- `info.json` 声明真实 FPS、features 的 dtype/shape/语义、数据路径、episode/frame/task 总数和 split。当前空 `stats.json` 不代表已计算归一化统计；`train` 标签不代表无泄漏或专家认证。
 - episode metadata 保存 length、数据 shard/全局起止范围、camera shard/起止时间，以及 source/mapping/normalization/repair/window/media lineage。
 - 全局 `index` 连续，`frame_index` 在每 episode 从0连续编号；episode 编号连续。数据与视频范围不重叠、无遗漏，metadata 范围恰好覆盖真实 rows/frames，不跨 episode 边界。
 - manifest 记录 dataset/view/plan/family/official revision、episode/frame 总数、video keys、实际文件 SHA-256、export revision，及 `raw_modified=false`、`interpolation_applied=false`、`resampling_applied=false`。不能写与实际执行不符的标记。
