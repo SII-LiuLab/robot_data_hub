@@ -183,7 +183,6 @@ Depth、tactile、audio 均不保存，任何输出都不包含这三类模态�
 
 - `info.json` 声明真实 FPS、features 的 dtype/shape/语义、数据路径、episode/frame/task 总数和 split。当前空 `stats.json` 不代表已计算归一化统计；`train` 标签不代表无泄漏或专家认证。
 - episode metadata 保存 length、数据 shard/全局起止范围、camera shard/起止时间，以及 source/mapping/normalization/repair/window/media lineage。
-- 全局 `index` 连续，`frame_index` 在每 episode 从0连续编号；episode 编号连续。数据与视频范围不重叠、无遗漏，metadata 范围恰好覆盖真实 rows/frames，不跨 episode 边界。
 - manifest 记录 dataset/view/plan/family/official revision、episode/frame 总数、video keys、实际文件 SHA-256、export revision，及 `raw_modified=false`、`interpolation_applied=false`、`resampling_applied=false`。不能写与实际执行不符的标记。
 - 普通/分片导出均须保留所有已启用语义字段和 metadata；schema 不一致、pose/mask/时间异常、checksum 或 planner lineage 不匹配时拒绝交付，不覆盖旧输出。
 
