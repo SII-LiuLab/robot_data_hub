@@ -8,8 +8,8 @@
 
 | 输出 | 内容 | 必须满足 |
 |---|---|---|
-| LeRobot v3 实体数据集 | 数值 Parquet、元数据；可选 RGB MP4 | 第2–6节；正式训练发布另满足第9节 |
-| 原生异频引用包 | selection、原生 token 引用、clock/profile、checksum；payload 留在源位置 | 第2、7、8节；训练资格满足第9节的共同门槛 |
+| LeRobot v3 实体数据集 | 数值 Parquet、元数据；可选 RGB MP4 | 第2–6节 |
+| 原生异频引用包 | selection、原生 token 引用、clock/profile、checksum；payload 留在源位置 | 第2、7、8节 |
 | 引用演练包、prepared 数值、兼容性输出 | 调试、准备或对照产物 | 明示范围与限制，不得仅凭生成成功标为正式训练数据 |
 
 LeRobot 当前采用 `lerobot-v3-export-v1`、`codebase_version=v3.0`，位姿为 `state-action-ee-pose-v2`；RGB 为 `video-serving-v1`；原生引用包为 `native-temporal-package-v1`。
@@ -223,37 +223,3 @@ reader 必须验证 package identity、预期 gate revision、文件和所引用
 - target 只有真实 token 首次命中的槽位可有监督；最终 loss mask 还须与 component mask 相交。重复引用不是新增观测；跨重叠窗口采样权重由训练配置负责。
 - observation 不越过 cutoff，target 不跨 selection/window；相对 action 的 base-state 和真实 horizon 保留，不能将100ms标签解释成10ms目标。
 - batch 不混合不兼容 export/字段 schema，padding 为 false mask。token-level valid 不替代原 payload 的逐分量 mask、动作来源、frame 或 horizon。
-
-## 9. 正式训练发布门槛
-
-所有相关门槛必须同时通过，并绑定**同一当前输入、复核范围与导出 revision**。对不适用模态明确记录“不适用”，不能伪造 pass；低层 exporter 成功不自动满足本节。
-
-| 门槛 | 通过条件 |
-|---|---|
-| 来源与语义 | active registry、适用 schema/硬件范围正确；mapping/normalization enabled；所需模型、标定与字段来源经过验证，blocker 已由真实证据解除 |
-| QC 与修复 | Q0/Q1不训练；Q2不走 `action_control.behavior_route=expert`；reject/quarantine 排除；repair 有 evidence、实际 `repair_applied=true` 且重跑 gate |
-| 人工复核与选择 | 当前 proposal/evidence 绑定的有效决定；冲突/过期阻塞。自动候选按既定规则和固定抽检采纳；所选窗口在已接受范围，不借 episode 通过绕过区间复核 |
-| 用途与覆盖 | 目标 route 所需监督/任务质量/重复与 split-overlap 证据齐全；缺证据不声称 expert、任务成功或无泄漏。许可/commercial-use 不作为训练、family 或 training-impact gate |
-| 媒体（适用时） | 输入完整审计、derived 完整验证、checksum/lineage/seek/count/PTS通过，plan/result/validation 身份一致；有界抽帧或截断 decode 不得代替最终验证 |
-| LeRobot 结构（实体输出） | 第3–6节全部通过，真实文件、字段、时间、episode/shard 范围及 checksum 一致 |
-| 官方读回（LeRobot 正式发布） | 固定官方环境真实读取输出，HEAD/源码/CODEBASE_VERSION一致，episode/frame 数及样本比对通过 |
-| 原生 reader（引用包） | 第7–8节通过，所请求来源的索引覆盖、payload 解析和训练语义适配有实际证据；不冒充官方 LeRobot 即用格式 |
-| 发布记录 | request/preflight、QC/review/gate/view/plan/export/validation revision一致；记录批准 source/family、episode/window/shard 范围、用途及剩余限制 |
-
-当前严格 Gate 配置要求 `min_confidence=0.8`、evidence revision 和完整硬证据，禁止 soft human pass；未解决的 blocking review 必须阻塞。HABIT 必需 provider 为 `release_numeric_integrity`、`release_action_mapping`、`release_media_integrity`、`release_cleaning_selection`，action 资格还核对后两者中的 mapping/selection；其他来源默认由未验证 contract 阻塞。
-
-当前官方 LeRobot pin 为 `4aaff99be4a1d81568c08c8f0296b41b40c99ec4`，`CODEBASE_VERSION=v3.0`，loader 为 `lerobot.datasets.LeRobotDataset`，视频 backend 为 `pyav`；使用隔离依赖环境和固定配置。当前读回逐 episode 检查首/中/末样本：所有数值字段存在且大小一致，整数/mask 精确相等，浮点按 `rtol=1e-5, atol=1e-6` 比对；视频样本检查形状与有限值。这不代替完整媒体 gate 或 raw→canonical 语义验证。缺依赖、dirty source、版本或数量/样本不符、loader 异常必须失败，不生成 `official_gate_passed=true`。
-
-当前实现边界：严格 source-specific release contract 已有 HABIT 路线，其余来源不能仅登记名称即放行；九源数值小批量验证不等于九源正式发布。仓库尚无已批准的九源统一轴 profile；源坐标输出通过不能代表 `canonical_axes` 已验收。ABC 官方30Hz等改变匹配/补值语义的输出只能标为 compatibility，保留 mask/provenance，不解除 canonical/FK gate。
-
-## 10. 维护与实现对应
-
-本文为跨模块导出交付条件总入口；细分文档保留算法、配置示例和操作说明。改动导出行为时须同步本文、对应机器配置和 validator；阅读本契约不要求跳转以下资料。
-
-| 领域 | 细分说明 / 实现依据 |
-|---|---|
-| 数值、动作、坐标 | [动作说明](../actions.md)、[源信号说明](../signals.md)；`action/ee_pose.py`、`serving/lerobot/{prepare,achieved,gripper,velocity}.py` |
-| 媒体 | [媒体规范](../video.md)、[机器配置](../../configs/video/encoding.h264.yaml)；`video/{audit,validate}.py` |
-| 文件、分片、官方读回 | `serving/lerobot/{plan,export,official,release}.py`；[官方版本配置](../../configs/lerobot/official.yaml) |
-| 原生包、训练查询 | [读取说明](../training-time.md)；`serving/{temporal,temporal_package}.py` |
-| 发布范围与使用 | [当前状态](../status.md)、[操作指南](../guide.md) |
