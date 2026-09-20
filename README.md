@@ -1,6 +1,6 @@
 # robot_data_hub
 
-- [RoboCOIN](https://huggingface.co/RoboCOIN)
+- [AgiBot World 2026](https://huggingface.co/datasets/agibot-world/AgiBotWorld2026)
 - [ABC-130k](https://huggingface.co/datasets/XDOF/ABC-130k)
 
 ## ABC-130k 数据选取配置
