@@ -17,7 +17,7 @@ from typing import Callable, TypeVar
 
 REPO_ID = "XDOF/ABC-130k"
 ENDPOINT = "https://huggingface.co"
-DEFAULT_MANIFEST = Path("manifests/abc130k-train-30-seed42.json")
+DEFAULT_MANIFEST = Path("dataset/manifests/abc130k-raw-5-seed42.json")
 T = TypeVar("T")
 
 
