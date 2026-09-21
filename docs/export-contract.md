@@ -11,7 +11,7 @@
 | 左臂、右臂实际 state | 各自的 EEF 绝对位姿 |
 | 左、右夹爪实际 state | 各自的开合程度，范围 `[0,1]`；`0` 完全闭合，`1` 完全张开 |
 | RGB | 一个或多个相机的彩色视频及逐帧时间戳 |
-| instruction | 描述该 episode 任务的 UTF-8 文本 |
+| instruction | 带起止时间的任务指令文本列表 |
 
 不记录 action、关节状态、速度、深度、触觉、力或音频。
 
@@ -23,7 +23,7 @@
 - episode 元数据记录 `clock_id` 及 `time_origin`（共同时间原点的定义）。各流不能分别以自己的首样本归零。
 - 保留原生采样时刻与间隔；不插值、重采样或补帧，不通过行号或 FPS 推算时间。
 - 每个流内按时间非递减排列。行号只表示该流内的样本顺序，不用于跨流配对。
-- instruction 适用于整个 episode，不作为周期采样流。
+- instruction 按共享 clock 的起止时间标注，不作为周期采样流。
 
 ## 3. State 表示
 
@@ -48,7 +48,6 @@ p_reference = R @ p_eef + t
 | 所有 state 流 | `timestamp_ns` | `int64` | 共享 clock 下的采样时刻 |
 | 左/右 EEF | `pose` | `float64[9]` | 位置 3 维 + rotation6D 6 维 |
 | 左/右夹爪 | `openness` | `float32` | 实际开合程度，`[0,1]` |
-| 所有 state 流 | `valid` | `bool` | 该行位姿或夹爪值是否有效 |
 
 `pose` 的固定顺序为：
 
@@ -59,8 +58,6 @@ p_reference = R @ p_eef + t
 `[x,y,z]` 是 TCP 在参考系中的位置，单位米；后 6 维是旋转矩阵 `R` 的第一列和第二列，第三列为第一列叉乘第二列。有效旋转的前两列须为正交单位向量。
 
 `openness` 的端点表示实际闭合和张开端点，不是该 episode 内的观测最小值和最大值。
-
-无效样本保留时间戳，`valid=false`，数值使用有限占位值；缺失样本不补行。有效零值与缺测通过 `valid` 区分。
 
 ## 4. RGB 与 instruction
 
@@ -73,7 +70,15 @@ p_reference = R @ p_eef + t
 
 索引与视频帧一一对应。保留原生帧序和采样间隔，包括可变帧率；采集时间以索引中的 `timestamp_ns` 为准。元数据记录各相机的 ID、视角（如左腕、右腕、外部）及图像宽高。
 
-`instruction` 在 episode 元数据中保存为一个非空字符串。
+`instruction` 在 episode 元数据中保存为列表 `instructions`，每条记录一段生效区间：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `start_ns` | `int64` | 该指令生效起点，相对 `time_origin` |
+| `end_ns` | `int64` | 该指令生效终点，须大于 `start_ns` |
+| `text` | `string` | 非空 UTF-8 任务指令文本 |
+
+至少一条；整集仅一句指令时，写一条覆盖全轨迹时间范围的记录即可。
 
 ## 5. 存储结构
 
@@ -94,4 +99,4 @@ dataset/
 
 `dataset.json` 记录 `format_version` 和 episode ID 列表。
 
-`episode.json` 记录 `episode_id`、`instruction`、`clock_id`、`time_origin`、`reference_frame`、左右 `eef_frames` 及 `cameras`。坐标系信息按第 3 节记录物理定义，相机信息按第 4 节记录。
+`episode.json` 记录 `episode_id`、`instructions`、`clock_id`、`time_origin`、`reference_frame`、左右 `eef_frames` 及 `cameras`。坐标系信息按第 3 节记录物理定义，相机信息按第 4 节记录。
