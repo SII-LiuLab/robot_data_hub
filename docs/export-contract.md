@@ -59,7 +59,7 @@ p_reference = R @ p_eef + t
 
 `openness` 的端点表示实际闭合和张开端点，不是该 episode 内的观测最小值和最大值。
 
-## 4. RGB 与 instruction
+## 4. RGB
 
 每个相机独立保存为无音轨的 H.264 MP4，并配套逐帧 Parquet 索引：
 
@@ -69,6 +69,8 @@ p_reference = R @ p_eef + t
 | `timestamp_ns` | `int64` | 该帧在共享 clock 下的采集时刻 |
 
 索引与视频帧一一对应。保留原生帧序和采样间隔，包括可变帧率；采集时间以索引中的 `timestamp_ns` 为准。元数据记录各相机的 ID、视角（如左腕、右腕、外部）及图像宽高。
+
+## 5. instruction
 
 `instruction` 在 episode 元数据中保存为列表 `instructions`，每条记录一段生效区间：
 
@@ -80,7 +82,7 @@ p_reference = R @ p_eef + t
 
 至少一条；整集仅一句指令时，写一条覆盖全轨迹时间范围的记录即可。
 
-## 5. 存储结构
+## 6. 存储结构
 
 ```text
 dataset/
@@ -99,4 +101,4 @@ dataset/
 
 `dataset.json` 记录 `format_version` 和 episode ID 列表。
 
-`episode.json` 记录 `episode_id`、`instructions`、`clock_id`、`time_origin`、`reference_frame`、左右 `eef_frames` 及 `cameras`。坐标系信息按第 3 节记录物理定义，相机信息按第 4 节记录。
+`episode.json` 记录 `episode_id`、`instructions`、`clock_id`、`time_origin`、`reference_frame`、左右 `eef_frames` 及 `cameras`。坐标系信息按第 3 节记录物理定义，相机信息按第 4 节记录，指令信息按第 5 节记录。
