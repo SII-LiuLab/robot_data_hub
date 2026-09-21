@@ -30,11 +30,11 @@
 
 ### 坐标系
 
-左右臂 EEF 位姿各自相对于一个 episode 内**时不变**的参考坐标系：该系相对外部世界保持恒定，不得使用随时间运动的 link（如人形躯干 link）。**不要求左右臂使用同一参考系**（臂间关系不在本契约消费范围内，UMI 等源也无法提供）。除时不变外，不规定其原点与轴向：各源可沿用各自天然的固定系（如机器人 base、odom 系、或 episode 起始工具位姿）。`info.json` 记录左右参考系与工具系的身份，使其可复现、可审计。
+左右臂 EEF 位姿各自相对于一个 episode 内**时不变**的参考坐标系：该系相对外部世界保持恒定，不得使用随时间运动的 link（如人形躯干 link）。**不要求左右臂使用同一参考系**（臂间关系不在本契约消费范围内，UMI 等源也无法提供）。除时不变外，不规定其原点与轴向：各源可沿用各自天然的固定系（如机器人 base、odom 系、或 episode 起始工具位姿）。参考系只需在 episode 内时不变；其身份不影响本格式的消费，故不记录。
 
 > 注：下游由 state 导出的 delta 采用 body-frame 定义 `Δ = T_k⁻¹ · T_{k+1}`，参考系的原点与轴向不影响 delta，这是上文不规定其轴向的前提。
 
-每个 EEF 坐标系原点为对应夹爪的工具中心点（TCP）；X 为工具接近方向，Y 沿夹爪开合轴，Z=X×Y。`info.json` 说明 TCP 的物理定义（如两指闭合中点）及工具 Y 轴正向所指的夹指，不能仅用 `left`、`right` 等名称代替定义。
+每个 EEF 坐标系原点为对应夹爪的工具中心点（TCP）；X 为工具接近方向，Y 沿夹爪开合轴，Z=X×Y。该构造由本契约固定，不随导出变化；具体工具的物理细节（如 TCP 位置、Y 正方向所指夹指）属于源契约，不在本格式中记录。
 
 pose 表示从 EEF 坐标系到参考坐标系的变换：
 
@@ -71,7 +71,7 @@ p_reference = R @ p_eef + t
 | `frame_index` | `int64` | 视频按显示顺序解码后的帧序号，从 0 开始 |
 | `timestamp_ns` | `int64` | 该帧在共享 clock 下的采集时刻 |
 
-索引与视频帧一一对应。保留原生帧序和采样间隔，包括可变帧率；采集时间以索引中的 `timestamp_ns` 为准。`info.json` 记录各相机的 ID、视角（如左腕、右腕、外部）及图像宽高。
+索引与视频帧一一对应。保留原生帧序和采样间隔，包括可变帧率；采集时间以索引中的 `timestamp_ns` 为准。
 
 ## 5. instruction
 
@@ -102,102 +102,32 @@ dataset/
         └── <camera_id>.parquet
 ```
 
-`info.json` 记录 `format_version` 及数据集级约定：参考系、工具系、EEF 流绑定、相机。
+`info.json` 只记录 `format_version`。
 
 `episodes.jsonl` 每行一个 episode，记录 `episode_id`、本集相机及指令区间。所有 episode 级信息集中在这一处，不再有 per-episode JSON 文件。各字段的具体定义见第 7 节。
 
 ## 7. 元数据 schema
 
-两处元数据：数据集级 `info.json` 与逐 episode 的 `episodes.jsonl`。以下为契约字段定义；未列出的字段不属于契约，实现应忽略。所有 `*_ns` 字段均为 `int64` 纳秒，位置单位为米。
+两处元数据：数据集级 `info.json` 与逐 episode 的 `episodes.jsonl`。以下为契约字段定义；未列出的字段不属于契约，实现应忽略。所有 `*_ns` 字段均为 `int64` 纳秒。
 
 ### 7.1 info.json
 
 | 字段 | 类型 | 必填 | 含义 |
 |---|---|---|---|
 | `format_version` | string | 是 | 契约版本号，`MAJOR.MINOR`；不兼容变更递增 MAJOR |
-| `frames` | object | 是 | 参考系与工具系约定注册表，见 7.2 |
-| `streams` | object | 是 | EEF 流到参考系/工具系的绑定，见 7.3 |
-| `cameras` | object | 是 | 相机注册表，见 7.4 |
 
 ```json
-{
-  "format_version": "2.0",
-  "frames": {
-    "references": {
-      "base_link": { "origin": "机器人底座中心", "axes": "X 前, Y 左, Z 上" }
-    },
-    "tools": {
-      "yam_gripper": {
-        "tcp": "两指闭合中点",
-        "x": "接近方向",
-        "y": "开合轴，正向指向<上指>",
-        "z": "X×Y"
-      }
-    }
-  },
-  "streams": {
-    "left_eef":  { "reference": "base_link", "tool": "yam_gripper" },
-    "right_eef": { "reference": "base_link", "tool": "yam_gripper" }
-  },
-  "cameras": {
-    "left_wrist": { "view": "left_wrist", "width": 640, "height": 480 }
-  }
-}
+{ "format_version": "2.0" }
 ```
 
-### 7.2 frames
-
-`frames.references` 与 `frames.tools` 是 ID 到文本定义的映射，供 7.3 引用。约定写在此处一次，不在 episode 级重复。
-
-`frames.references.<id>`：
-
-| 字段 | 类型 | 必填 | 含义 |
-|---|---|---|---|
-| `origin` | string | 是 | 参考系原点的物理定义 |
-| `axes` | string | 是 | 参考系轴向的物理定义，须可据此确认其在 episode 内恒定 |
-
-`frames.tools.<id>`：
-
-| 字段 | 类型 | 必填 | 含义 |
-|---|---|---|---|
-| `tcp` | string | 是 | TCP 的物理定义（如“两指闭合中点”） |
-| `x` | string | 是 | 工具 X 轴的物理定义（接近方向） |
-| `y` | string | 是 | 工具 Y 轴的物理定义，须指明正向所指的夹指，不能仅写 `left`/`right` |
-| `z` | string | 是 | 工具 Z 轴的物理定义，固定为 X×Y |
-
-EEF 原点与轴向固定为第 3 节规定（原点 = TCP，X = 接近方向，Y = 开合轴，Z = X×Y）。
-
-### 7.3 streams
-
-`streams` 把 EEF 状态流绑定到 7.2 中的参考系与工具系；仅列出需要帧绑定的流（左右夹爪流无帧字段，故不列出）。每个值为：
-
-| 字段 | 类型 | 必填 | 含义 |
-|---|---|---|---|
-| `reference` | string | 是 | `frames.references` 中的键 |
-| `tool` | string | 是 | `frames.tools` 中的键 |
-
-左右可指向相同或不同的参考系/工具系，契约不要求相同。
-
-### 7.4 cameras
-
-`cameras` 以 `camera_id` 为键：
-
-| 字段 | 类型 | 必填 | 含义 |
-|---|---|---|---|
-| `view` | string | 是 | 视角，建议取值 `left_wrist`、`right_wrist`、`exterior`、`other` |
-| `width` | int32 | 是 | 图像宽（像素） |
-| `height` | int32 | 是 | 图像高（像素） |
-
-每个键须存在对应的 `rgb/<camera_id>.mp4` 与 `rgb/<camera_id>.parquet`。
-
-### 7.5 episodes.jsonl
+### 7.2 episodes.jsonl
 
 UTF-8 JSONL，每行一个 episode 对象，行顺序不限：
 
 | 字段 | 类型 | 必填 | 含义 |
 |---|---|---|---|
 | `episode_id` | string | 是 | 等于 `episodes/<episode_id>/` 目录名 |
-| `cameras` | string[] | 是 | 本集包含的相机，须为 `info.json.cameras` 的键，且与 `rgb/` 内容一一对应 |
+| `cameras` | string[] | 是 | 本集包含的相机，须与 `rgb/` 内容一一对应 |
 | `instructions` | object[] | 是 | 指令区间列表，字段见第 5 节，至少一条 |
 
 全体 `episode_id` 须与 `episodes/` 下的子目录一一对应。
