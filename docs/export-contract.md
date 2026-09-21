@@ -29,9 +29,11 @@
 
 ### 坐标系
 
-左右臂 EEF 位姿均相对于同一个、在 episode 内固定的参考坐标系 `reference_frame`，采用右手系，X 向前、Y 向左、Z 向上。元数据明确参考系的物理原点及“前、左、上”的依据。
+左右臂 EEF 位姿均相对于同一个参考坐标系 `reference_frame`，且该参考系必须**时不变**：在整个 episode 内相对外部世界保持恒定，不得使用随时间运动的 link（如人形躯干 link）作为参考系。除时不变外，不规定其原点与轴向：各源可沿用各自天然的固定系（如机器人 base、odom 系、或 episode 起始工具位姿）。元数据只需记录该系的身份，使其可复现、可审计。
 
-每个 EEF 坐标系原点为对应夹爪的工具中心点（TCP）；X 为工具接近方向，Y 沿夹爪开合轴，Z=X×Y。元数据明确左右 TCP 的物理位置和工具 Y 轴正向所指的夹指，不能仅用 `left`、`right` 等名称代替定义。
+> 注：下游由 state 导出的 delta 采用 body-frame 定义 `Δ = T_k⁻¹ · T_{k+1}`，参考系的原点与轴向不影响 delta，这是上文不规定其轴向的前提。
+
+每个 EEF 坐标系原点为对应夹爪的工具中心点（TCP）；X 为工具接近方向，Y 沿夹爪开合轴，Z=X×Y。元数据说明 TCP 的物理定义（如两指闭合中点）及工具 Y 轴正向所指的夹指，不能仅用 `left`、`right` 等名称代替定义。
 
 pose 表示从 EEF 坐标系到参考坐标系的变换：
 
@@ -101,4 +103,4 @@ dataset/
 
 `dataset.json` 记录 `format_version` 和 episode ID 列表。
 
-`episode.json` 记录 `episode_id`、`instructions`、`clock_id`、`time_origin`、`reference_frame`、左右 `eef_frames` 及 `cameras`。坐标系信息按第 3 节记录物理定义，相机信息按第 4 节记录，指令信息按第 5 节记录。
+`episode.json` 记录 `episode_id`、`instructions`、`clock_id`、`time_origin`、`reference_frame`、左右 `eef_frames` 及 `cameras`。坐标系按第 3 节记录：参考系记录其身份，`eef_frames` 记录 TCP 与轴向的物理定义；相机信息按第 4 节记录，指令信息按第 5 节记录。
