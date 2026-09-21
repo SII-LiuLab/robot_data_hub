@@ -3,6 +3,7 @@
 - [AgiBot World 2026](https://huggingface.co/datasets/agibot-world/AgiBotWorld2026)
 - [ABC-130k](https://huggingface.co/datasets/XDOF/ABC-130k)
 - [Galaxea Open-World Dataset](https://huggingface.co/datasets/OpenGalaxea/Galaxea-Open-World-Dataset)
+- [HiFi-UMI-2K](https://huggingface.co/datasets/simple-world-lab/HiFi-UMI-2K)
 
 ## 项目组织原则
 
@@ -34,3 +35,9 @@
 - 说明：该数据集以任务归档为最小下载单元，无法单独下载单条轨迹，因此抽样单元是任务而非轨迹；5 个归档共含 244 条轨迹。
 - 已下载：5 个任务归档，共约 5.00 GiB / 244 条轨迹，保存于 `dataset/raw/Galaxea-Open-World-Dataset/`（tar.gz 及 `extract` 解压后的 LeRobot 数据集）。
 
+## HiFi-UMI-2K 数据选取配置
+
+- 数据范围：全部 398 个 shard（`chunk-XXXX/part-0000`），每个 shard 是一个自包含的 LeRobot v3 数据集，内含约 140 条 episode（轨迹）。
+- 抽样方式：先按体积取最小的 1 个 shard（当前为 `chunk-0397`），再在该 shard 内用固定随机种子 `42` 随机抽取 5 条轨迹；也可用 `scripts/download_hifi_umi_subset.py select --strategy smallest` 取最短的 5 条。
+- 说明：该数据集把同一 shard 内全部 episode 的 6 路相机视频分别拼接成一路一个 MP4，单条轨迹不是独立文件，因此下载时对远端 MP4 发起 HTTP range 请求，按 episode 的 `from/to_timestamp` 精确截取并逐帧重新编码为 H.264（CRF 18，码率与源相当）。源 shard 的 `meta` 及各表保存在 `source/`。
+- 已下载：5 条轨迹（`episode_000013`、`000024`、`000084`、`000091`、`000122`），共 8,395 帧 / 约 0.75 GiB，保存于 `dataset/raw/HiFi-UMI-2K/`；每个 episode 含 6 路相机 MP4、逐帧 `data.parquet` 与 `episode.json`。
