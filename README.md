@@ -2,6 +2,7 @@
 
 - [AgiBot World 2026](https://huggingface.co/datasets/agibot-world/AgiBotWorld2026)
 - [ABC-130k](https://huggingface.co/datasets/XDOF/ABC-130k)
+- [Galaxea Open-World Dataset](https://huggingface.co/datasets/OpenGalaxea/Galaxea-Open-World-Dataset)
 
 ## 项目组织原则
 
@@ -25,4 +26,11 @@
 - 数据范围：`ImitationLearning/CommercialSpaces`（商业场景），当前 138 条轨迹。
 - 抽样方式：按文件体积取最小的 5 条轨迹（便于快速采样）；也可用 `scripts/download_agibotworld_subset.py select --strategy random --seed 42` 随机抽样。
 - 已下载：5 条轨迹，共约 28 GiB，保存于 `dataset/raw/AgiBotWorld2026/`（LeRobot 格式 tar.gz）。
+
+## Galaxea Open-World Dataset 数据选取配置
+
+- 数据范围：`lerobot/` 下全部 227 个任务归档，每个归档是一个自包含的 LeRobot v2.1 数据集，内含多条轨迹（episode）。
+- 抽样方式：按归档体积取最小的 5 个任务归档（便于快速采样）；也可用 `scripts/download_galaxea_subset.py select --strategy random --seed 42` 随机抽样。
+- 说明：该数据集以任务归档为最小下载单元，无法单独下载单条轨迹，因此抽样单元是任务而非轨迹；5 个归档共含 244 条轨迹。
+- 已下载：5 个任务归档，共约 5.00 GiB / 244 条轨迹，保存于 `dataset/raw/Galaxea-Open-World-Dataset/`（tar.gz 及 `extract` 解压后的 LeRobot 数据集）。
 
