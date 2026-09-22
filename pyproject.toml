@@ -5,7 +5,10 @@ description = "Robot dataset selection and download tools"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "av>=14",
+    "av>=18.1",
+    "mcap>=1.2",
+    "mcap-protobuf-support>=0.5",
+    "numpy>=1.24",
     "huggingface-hub>=1.0,<2.0",
     "httpx[socks]>=0.28.1,<1.0",
     "modelscope>=1.40.1,<2.0",
