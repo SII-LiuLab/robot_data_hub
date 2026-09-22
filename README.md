@@ -19,6 +19,7 @@
 
 ## ABC-130k 数据选取配置
 
+- 源格式说明：[`docs/abc130k-source.md`](docs/abc130k-source.md)。
 - 数据范围：YAM 双臂真实数据，覆盖 `data/train/` 下全部任务目录（当前 201 个），优先保证任务多样性。
 - 抽样方式：每个任务目录随机选取 30 条完整轨迹，不足 30 条则全部保留；固定随机种子为 `42`。
 - 预计规模：最多 6,030 条轨迹，约占原数据集 130,703 条轨迹的 4.6%（按轨迹数量计算）。
@@ -49,3 +50,13 @@
 - 抽样方式：用固定随机种子 `42` 在整个数据集上随机抽取 5 条轨迹（`scripts/download_molmoact2_subset.py select --strategy random --seed 42`）；也可用 `--strategy smallest` 取最短的 5 条。
 - 说明：该数据集把同一视频文件内多条 episode 的 3 路相机视频（`top`/`left`/`right`，AV1）分别拼接成一路 MP4，单条轨迹不是独立文件，因此下载时对远端 MP4 发起 HTTP range 请求，按 episode 的 `from/to_timestamp` 精确截取并逐帧重新编码为 H.264（CRF 18，码率与源相当）。episode 的逐帧表从 `data/chunk-*/file-*.parquet` 中按 `episode_index` 过滤得到；`meta/tasks_annotated.parquet` 提供逐 episode 的语言标注。源 `meta` 及各数据表保存在 `source/`。
 - 已下载：5 条轨迹（`episode_006848`、`014787`、`022490`、`030268`、`032144`），共 12,103 帧 / 约 0.62 GiB，保存于 `dataset/raw/MolmoAct2-BimanualYAM/`；每个 episode 含 3 路相机 MP4、逐帧 `data.parquet` 与 `episode.json`。
+
+## 统一机器人模型
+
+ABC-130K / MolmoAct2 对应 YAM，AgiBotWorld2026 对应 G2，Galaxea 对应 R1 Lite。
+三套自包含 URDF（本体、双臂、夹爪、视觉/碰撞网格、材质和清单）的入口见
+[`assets/robot_models/README.md`](assets/robot_models/README.md)。
+`assets/` 不纳入 Git，完整资产公开保存在 ModelScope：
+[`BingqianWu/RobotDataHub-Assets`](https://modelscope.cn/models/BingqianWu/RobotDataHub-Assets)。
+下载该仓库后，将其中的 `assets/` 目录放回本项目根目录即可。
+可直接用于可视化和 FK；数据集 TCP、零位及安装外参尚未逐帧标定，状态在清单中明确记录。
