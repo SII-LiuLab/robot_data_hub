@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Compute a canonical link pose from a self-contained URDF package.
 
-python scripts/robot_fk.py --dataset ABC-130K --link arm_left_grasp
-python scripts/robot_fk.py --model-dir /path/to/yam --link arm_left_tcp --joints '{"arm_left_joint2": 1.047}'
+python scripts/robot/fk.py --dataset ABC-130K --link arm_left_grasp
+python scripts/robot/fk.py --model-dir /path/to/yam --link arm_left_tcp --joints '{"arm_left_joint2": 1.047}'
 Omitted joints use zero; --display-pose instead initializes the inspection pose.
 Output is T_base_link: p_base = T_base_link @ p_link (homogeneous coordinates).
 """
 import argparse
 import json
 from pathlib import Path
+import sys
 
-from urdf_model import parse_urdf
-from robot_kinematics import fk_poses
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.robot.urdf_model import parse_urdf
+from scripts.robot.kinematics import fk_poses
 
 
 def main():
@@ -25,7 +28,7 @@ def main():
     args = parser.parse_args()
     directory = args.model_dir
     if args.dataset:
-        models = Path(__file__).resolve().parents[1] / "assets/robot_models"
+        models = Path(__file__).resolve().parents[2] / "assets/robot_models"
         catalog = json.loads((models / "catalog.json").read_text())["datasets"]
         if args.dataset not in catalog:
             parser.error(f"Unknown dataset; choose from {', '.join(catalog)}")

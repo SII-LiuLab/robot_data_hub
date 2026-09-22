@@ -1,14 +1,11 @@
 """Checks for distributable packages and source-verified forward kinematics."""
-import sys
 import unittest
-from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from urdf_model import parse_urdf
-from robot_kinematics import fk_poses
-from check_robot_packages import check_package, MODELS
+from scripts.robot.urdf_model import parse_urdf
+from scripts.robot.kinematics import fk_poses
+from scripts.robot.check_packages import check_package, MODELS
 
 
 class ModelTests(unittest.TestCase):

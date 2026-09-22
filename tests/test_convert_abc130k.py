@@ -10,10 +10,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from scripts import convert_abc130k as script
-from scripts.export_common import VideoWriter, write_state
-from scripts.robot_kinematics import fk_poses
-from scripts.urdf_model import parse_urdf
+from scripts.convert import abc130k as script
+from scripts.convert.export_common import VideoWriter, write_state
+from scripts.robot.kinematics import fk_poses
+from scripts.robot.urdf_model import parse_urdf
 
 
 MODEL = script.ROOT / 'assets/robot_models/yam'

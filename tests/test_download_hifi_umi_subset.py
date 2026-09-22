@@ -5,7 +5,7 @@ import unittest
 
 from huggingface_hub.hf_api import RepoFile
 
-from scripts import download_hifi_umi_subset as script
+from scripts.download import hifi_umi_subset as script
 
 
 SHA = 'a' * 40

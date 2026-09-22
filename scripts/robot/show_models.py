@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Open a MuJoCo viewer with the three canonical robot models side by side.
 
-    python scripts/show_robot_models.py            # interactive viewer
-    python scripts/show_robot_models.py --seconds 3  # auto-close (smoke test)
+    python scripts/robot/show_models.py            # interactive viewer
+    python scripts/robot/show_models.py --seconds 3  # auto-close (smoke test)
 
 Why this is not just ``mujoco.viewer.launch(urdf)``
 ---------------------------------------------------
@@ -28,7 +28,7 @@ from pathlib import Path
 import mujoco
 import mujoco.viewer
 
-MODELS = Path(__file__).resolve().parents[1] / "assets" / "robot_models"
+MODELS = Path(__file__).resolve().parents[2] / "assets" / "robot_models"
 ROBOTS = [("yam", 0.0), ("agibot_g2", 2.4), ("galaxea_r1lite", 4.8)]
 
 

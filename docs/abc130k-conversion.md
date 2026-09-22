@@ -1,12 +1,12 @@
 # ABC-130K 转换
 
-入口：`scripts/convert_abc130k.py`。输出遵循 [目标契约 v2.0](export-contract.md)。
+入口：`scripts/convert/abc130k.py`。输出遵循 [目标契约 v2.0](export-contract.md)。
 
 ```bash
 pip install -e .
-python scripts/convert_abc130k.py
+python scripts/convert/abc130k.py
 # 先转换一条；输出目录必须尚不存在
-python scripts/convert_abc130k.py --limit 1 --output-dir dataset/export/ABC-130K-preview
+python scripts/convert/abc130k.py --limit 1 --output-dir dataset/export/ABC-130K-preview
 ```
 
 默认递归读取 `dataset/raw/ABC-130K/` 内的 `episode.mcap`，输出到
@@ -26,9 +26,9 @@ lookahead 和额外输出延迟。CQ 18 与 x264 CRF 18 不是等价质量参数
 
 ```bash
 # NVDEC 解码后下载到主存，再用 libx264 编码
-python scripts/convert_abc130k.py --video-decoder nvdec --video-encoder libx264
+python scripts/convert/abc130k.py --video-decoder nvdec --video-encoder libx264
 # 全 CPU
-python scripts/convert_abc130k.py --video-decoder cpu --video-encoder libx264
+python scripts/convert/abc130k.py --video-decoder cpu --video-encoder libx264
 ```
 
 NVENC 通路要求 NVDEC，不支持静默改为 CPU 解码后上传。
@@ -70,5 +70,5 @@ Z 为 `+Y_link6`，满足 X×Y=Z。模型 grasp site 的旋转右乘：
 - 在输出目录旁暂存，全部成功后才发布整个数据集；失败自动清理暂存目录。
   不覆盖已有输出目录。暂存需要容纳本次完整导出的空间。
 
-公共 Parquet/视频写出逻辑位于 `scripts/export_common.py`；FK 复用
-`scripts/robot_kinematics.py`，源字段映射与 YAM 工具坐标系约定位于转换入口。
+公共 Parquet/视频写出逻辑位于 `scripts/convert/export_common.py`；FK 复用
+`scripts/robot/kinematics.py`，源字段映射与 YAM 工具坐标系约定位于转换入口。

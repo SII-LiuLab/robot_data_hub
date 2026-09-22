@@ -6,10 +6,8 @@ resolved recursively. Input positions use radians/metres and canonical names.
 from __future__ import annotations
 import math
 import numpy as np
-if __package__:
-    from .urdf_model import Robot
-else:
-    from urdf_model import Robot
+
+from .urdf_model import Robot
 
 def _rot_x(a): return np.array([[1, 0, 0], [0, math.cos(a), -math.sin(a)], [0, math.sin(a), math.cos(a)]])
 def _rot_y(a): return np.array([[math.cos(a), 0, math.sin(a)], [0, 1, 0], [-math.sin(a), 0, math.cos(a)]])

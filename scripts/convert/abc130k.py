@@ -11,16 +11,15 @@ import tempfile
 
 import numpy as np
 
-if __package__:
-    from .export_common import VideoWriter, write_state, write_video_index
-    from .urdf_model import Robot, parse_urdf
-    from .robot_kinematics import fk_poses
-else:
-    from export_common import VideoWriter, write_state, write_video_index
-    from urdf_model import Robot, parse_urdf
-    from robot_kinematics import fk_poses
+if not __package__:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-ROOT = Path(__file__).resolve().parents[1]
+from scripts.convert.export_common import VideoWriter, write_state, write_video_index
+from scripts.robot.urdf_model import Robot, parse_urdf
+from scripts.robot.kinematics import fk_poses
+
+ROOT = Path(__file__).resolve().parents[2]
 CAMERAS = {f'/{name}-camera': name.replace('-', '_') for name in
            ('top', 'top-left', 'top-right', 'left-wrist', 'right-wrist')}
 STATES = {f'/{side}-{kind}-state': f'{side}_{output}'

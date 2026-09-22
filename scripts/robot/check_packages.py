@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate distributable URDF packages without upstream sources.
 
-python scripts/check_robot_packages.py --load --report /tmp/model-validation.json
+python scripts/robot/check_packages.py --load --report /tmp/model-validation.json
 --load requires mujoco; checks visual AND collision geometry after relocation.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-MODELS = Path(__file__).resolve().parents[1] / "assets/robot_models"
+MODELS = Path(__file__).resolve().parents[2] / "assets/robot_models"
 
 
 def check_package(directory: Path, load: bool = False) -> dict:

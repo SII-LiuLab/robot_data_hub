@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import httpx
 
-from scripts import download_galaxea_subset as script
+from scripts.download import galaxea_subset as script
 
 
 SHA = 'a' * 40
