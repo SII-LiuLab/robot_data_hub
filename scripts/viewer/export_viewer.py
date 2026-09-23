@@ -1,4 +1,4 @@
-"""Local viewer for the exported dataset contract (format 2.x)."""
+"""Local viewer for the exported dataset contract."""
 
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,10 +18,6 @@ CAMERA_ID = re.compile(r'^[a-z0-9_]+$')
 
 
 def read_dataset(root):
-    info = json.loads((root / 'info.json').read_text(encoding='utf-8'))
-    version = info['format_version']
-    if not re.fullmatch(r'2\.\d+', version):
-        raise ValueError(f'Unsupported export format version: {version}')
     records = [json.loads(line) for line in (root / 'episodes.jsonl').read_text(
         encoding='utf-8').splitlines() if line.strip()]
     if not records:
@@ -38,7 +34,7 @@ def read_dataset(root):
                 not isinstance(c, str) or not CAMERA_ID.fullmatch(c) for c in cameras):
             raise ValueError(f'Invalid cameras in episode {episode_id}')
         episodes[episode_id] = record
-    return version, episodes
+    return episodes
 
 
 def read_episode(root, record):
@@ -120,7 +116,7 @@ class FrameReader:
 
 
 def serve(root, host, port):
-    version, episodes = read_dataset(root)
+    episodes = read_dataset(root)
     readers = {}
     readers_lock = Lock()
     page = (HERE / 'index.html').read_bytes()
@@ -152,7 +148,7 @@ def serve(root, host, port):
                     self.reply(200, pose_script, 'text/javascript; charset=utf-8')
                     return
                 if parsed.path == '/api/dataset':
-                    payload = {'format_version': version, 'episodes': list(episodes)}
+                    payload = {'episodes': list(episodes)}
                 elif parsed.path == '/api/episode':
                     episode_id = query['id'][0]
                     payload = read_episode(root, episodes[episode_id])

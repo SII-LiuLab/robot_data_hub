@@ -16,7 +16,6 @@ def exported_dataset(tmp_path):
     episode = root / 'episodes' / 'sample'
     (episode / 'state').mkdir(parents=True)
     (episode / 'rgb').mkdir()
-    (root / 'info.json').write_text('{"format_version":"2.0"}', encoding='utf-8')
     record = {'episode_id': 'sample', 'cameras': ['top'],
               'instructions': [{'start_ns': 0, 'end_ns': 30, 'text': 'pick'}]}
     (root / 'episodes.jsonl').write_text(json.dumps(record) + '\n', encoding='utf-8')
@@ -41,8 +40,7 @@ class ExportViewerTests(unittest.TestCase):
         self.root, self.record = exported_dataset(Path(self.temporary.name))
 
     def test_reads_only_export_contract(self):
-        version, episodes = read_dataset(self.root)
-        self.assertEqual(version, '2.0')
+        episodes = read_dataset(self.root)
         self.assertEqual(episodes, {'sample': self.record})
         data = read_episode(self.root, self.record)
         self.assertEqual(data['end_ns'], 30)

@@ -99,7 +99,6 @@ Parquet 实体的列名与上表一致。`pose` 为单个列，Arrow 类型 `fix
 
 ```text
 dataset/
-├── info.json
 ├── episodes.jsonl
 └── episodes/<episode_id>/
     ├── state/
@@ -112,27 +111,13 @@ dataset/
         └── <camera_id>.parquet
 ```
 
-`info.json` 只记录 `format_version`。
-
 每个 episode 必须含四路 state 与至少一个相机；上表中四张 state Parquet 及每个相机的 MP4/索引均不得缺失。
 
 `episodes.jsonl` 每行一个 episode，记录 `episode_id`、本集相机及指令区间。所有 episode 级信息集中在这一处，不再有 per-episode JSON 文件。各字段的具体定义见第 7 节。
 
 ## 7. 元数据 schema
 
-两处元数据：数据集级 `info.json` 与逐 episode 的 `episodes.jsonl`。以下为契约字段定义；未列出的字段不属于契约，实现应忽略。所有 `*_ns` 字段均为 `int64` 纳秒。
-
-### 7.1 info.json
-
-| 字段 | 类型 | 必填 | 含义 |
-|---|---|---|---|
-| `format_version` | string | 是 | 契约版本号，`MAJOR.MINOR`；不兼容变更递增 MAJOR |
-
-```json
-{ "format_version": "3.0" }
-```
-
-### 7.2 episodes.jsonl
+唯一的元数据是逐 episode 的 `episodes.jsonl`。以下为契约字段定义；未列出的字段不属于契约，实现应忽略。所有 `*_ns` 字段均为 `int64` 纳秒。
 
 UTF-8 JSONL，每行一个 episode 对象，行顺序不限：
 

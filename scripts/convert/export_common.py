@@ -1,4 +1,4 @@
-"""Shared writers for export-contract v2.0."""
+"""Shared writers for the export contract."""
 from fractions import Fraction
 from pathlib import Path
 

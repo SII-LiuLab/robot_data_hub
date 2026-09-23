@@ -1,6 +1,6 @@
 # ABC-130K 转换
 
-入口：`scripts/convert/abc130k.py`。输出遵循 [目标契约 v2.0](export-contract.md)。
+入口：`scripts/convert/abc130k.py`。输出遵循[目标契约](export-contract.md)。
 
 ```bash
 pip install -e .
@@ -41,8 +41,16 @@ NVENC 通路要求 NVDEC，不支持静默改为 CPU 解码后上传。
 
 TCP 使用模型 `arm_{side}_grasp` 的位置，即 `link6` 的 `[0,0,0.1347]` 米。
 该模型的同名 `tcp` site 位于腕部原点，因此这里选择抓取中心 `grasp`。
-导出 X 为 `+Z_link6`（工具接近方向），Y 为 `+X_link6`（朝 finger2 一侧，沿夹爪开合轴），
-Z 为 `+Y_link6`，满足 X×Y=Z。模型 grasp site 的旋转右乘：
+
+EEF 三轴按契约的固定规则对齐到 YAM 模型：
+
+- `+X = +Z_link6`：工具接近方向，从 `link6` 原点指向 TCP。
+- `+Z = +Y_link6`：掌背法向。模型展示位姿下 `+Y_link6` 即 `base_link` 的 `+Z`（正上方），
+  腕部 D405 相机也位于该侧。
+- `+Y = +Z × +X = +X_link6`：夹爪开合轴，指向 finger2 一侧。
+
+模型 grasp site 自带旋转为 X = −Y_link6、Y = +X_link6、Z = +Z_link6，
+因此从 grasp site 到规范 EEF 系右乘：
 
 ```text
 [ 0  0 -1 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert ABC-130K MCAP episodes to export-contract v2.0 using YAM joint FK."""
+"""Convert ABC-130K MCAP episodes to the export contract using YAM joint FK."""
 from __future__ import annotations
 
 import argparse
@@ -50,7 +50,8 @@ class YamFK:
             self.arms[side] = (Robot(robot.name, (link, *(j.child for j in reversed(chain))),
                                     tuple(reversed(chain))), arm['joints'], tip)
         # grasp axes: X=-Y_link6, Y=+X_link6, Z=+Z_link6.
-        # Export axes: X=+Z_link6 (approach), Y=+X_link6 (finger2 side), Z=+Y_link6.
+        # Contract EEF: +X=+Z_link6 (approach), +Z=+Y_link6 (back of hand),
+        # +Y=+Z x +X=+X_link6.
         self.rotation = np.array([[0., 0., -1.], [0., 1., 0.], [1., 0., 0.]])
 
     def pose(self, side, positions):
@@ -166,7 +167,6 @@ def convert(source, output, model_dir, limit=None, video_decoder='cpu', video_en
     with tempfile.TemporaryDirectory(prefix=f'.{output.name}-', dir=output.parent) as temporary:
         staged = Path(temporary) / 'dataset'
         staged.mkdir()
-        (staged / 'info.json').write_text('{"format_version": "2.0"}\n', encoding='utf-8')
         with (staged / 'episodes.jsonl').open('w', encoding='utf-8') as metadata:
             for index, path in enumerate(files, 1):
                 print(f'[{index}/{len(files)}] {path.parent.name}', flush=True)
