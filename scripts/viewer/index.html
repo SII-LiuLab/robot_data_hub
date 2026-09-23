@@ -128,6 +128,17 @@ function sampleIndex(times, target) {
 function frameUrl(id, camera, index, width) {
   return `/api/frame?id=${encodeURIComponent(id)}&camera=${encodeURIComponent(camera)}&index=${index}&width=${width}`;
 }
+// 通用相机排序：俯视/全局视角优先，腕部/鱼眼靠后。用词根正则匹配，
+// 不依赖某个数据集的具体命名，越像“看全局”的相机越适合当主视图。
+const CAMERA_HINTS = [
+  [/top|overhead|bird|global|high/, 100],
+  [/head/, 50], [/front/, 20],
+  [/wrist|hand|gripper/, -100], [/fisheye/, -20],
+];
+function orderedCameras(ids) {
+  const score = id => CAMERA_HINTS.reduce((sum, [re, weight]) => sum + (re.test(id) ? weight : 0), 0);
+  return [...ids].sort((a, b) => score(b) - score(a) || a.localeCompare(b));
+}
 function setPrimaryCamera(camera) {
   $('camera-name').textContent = camera;
   for (const [id, card] of Object.entries(cameraCards)) {
@@ -178,7 +189,8 @@ function setup(episode) {
   poseViews = {}; cameraCards = {};
   data = episode; currentNs = 0; setPlaying(false);
   $('primaryCamera').replaceChildren(); $('otherCameras').replaceChildren(); $('poses').replaceChildren();
-  for (const camera of Object.keys(data.cameras)) {
+  const cameras = orderedCameras(Object.keys(data.cameras));
+  for (const camera of cameras) {
     const card = document.createElement('button'); card.type = 'button'; card.className = 'camera';
     card.setAttribute('aria-label', `切换到 ${camera} 相机`);
     const img = document.createElement('img'); img.id = 'img-' + camera; img.alt = camera + ' 当前帧';
@@ -198,9 +210,7 @@ function setup(episode) {
     card.addEventListener('click', () => { setPrimaryCamera(camera); render(); });
     cameraCards[camera] = card;
   }
-  const cameras = Object.keys(data.cameras);
-  setPrimaryCamera(cameras.find(id => id === 'top') || cameras.find(id => id === 'top_left') ||
-    cameras.find(id => id === 'top_right') || cameras[0]);
+  setPrimaryCamera(cameras[0]);
   for (const side of ['left', 'right']) {
     const card = document.createElement('section'); card.className = 'pose';
     const head = document.createElement('div'); head.className = 'pose-head';
