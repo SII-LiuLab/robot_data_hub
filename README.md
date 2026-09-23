@@ -28,6 +28,8 @@
 
 ## AgiBot World 2026 数据选取配置
 
+- 源格式与字段语义：[`docs/agibotworld2026-source.md`](docs/agibotworld2026-source.md)。
+- 转换到统一导出格式：`python scripts/convert/agibotworld2026.py`；用法、G2 TCP 和缺少底盘位姿时的处理见 [`docs/agibotworld2026-conversion.md`](docs/agibotworld2026-conversion.md)。
 - 数据范围：`ImitationLearning/CommercialSpaces`（商业场景），当前 138 条轨迹。
 - 抽样方式：按文件体积取最小的 5 条轨迹（便于快速采样）；也可用 `scripts/download/agibotworld_subset.py select --strategy random --seed 42` 随机抽样。
 - 已下载：5 条轨迹，共约 28 GiB，保存于 `dataset/raw/AgiBotWorld2026/`（LeRobot 格式 tar.gz）。
