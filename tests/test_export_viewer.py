@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from scripts.viewer.export_viewer import read_dataset, read_episode, serve
+from scripts.viewer.export_viewer import FrameReader, read_dataset, read_episode, serve
 
 
 def exported_dataset(tmp_path):
@@ -85,5 +86,32 @@ class ExportViewerTests(unittest.TestCase):
                 handler.wfile = SimpleNamespace(write=Mock(side_effect=BrokenPipeError))
                 handler.reply(200, b'image', 'image/jpeg')
 
-        with patch('scripts.viewer.export_viewer.HTTPServer', FakeServer):
+        with patch('scripts.viewer.export_viewer.ThreadingHTTPServer', FakeServer):
             serve(self.root, '127.0.0.1', 8765)
+
+    def test_frame_reader_uses_threaded_decode_and_requested_width(self):
+        class FakeImage:
+            def save(self, output, **_):
+                output.write(b'jpeg')
+
+        class FakeFrame:
+            width = 1920
+            height = 1200
+
+            def __init__(self):
+                self.reformat = Mock(return_value=SimpleNamespace(to_image=lambda: FakeImage()))
+
+        stream = SimpleNamespace(thread_type=None)
+        frame = FakeFrame()
+        container = SimpleNamespace(
+            streams=SimpleNamespace(video=[stream]),
+            decode=Mock(return_value=iter([frame])),
+            close=Mock(),
+        )
+        fake_av = SimpleNamespace(open=Mock(return_value=container))
+        reader = FrameReader()
+        with patch.dict(sys.modules, {'av': fake_av}):
+            self.assertEqual(reader.get(Path('video.mp4'), 0, 320), b'jpeg')
+        self.assertEqual(stream.thread_type, 'AUTO')
+        frame.reformat.assert_called_once_with(width=320, height=200, format='rgb24')
+        reader.close()

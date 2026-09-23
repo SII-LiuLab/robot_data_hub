@@ -118,8 +118,8 @@ function sampleIndex(times, target) {
   while (lo < hi) { const mid = (lo + hi) >>> 1; if (times[mid] <= target) lo = mid + 1; else hi = mid; }
   return lo - 1;
 }
-function frameUrl(id, camera, index) {
-  return `/api/frame?id=${encodeURIComponent(id)}&camera=${encodeURIComponent(camera)}&index=${index}`;
+function frameUrl(id, camera, index, width) {
+  return `/api/frame?id=${encodeURIComponent(id)}&camera=${encodeURIComponent(camera)}&index=${index}&width=${width}`;
 }
 function setPrimaryCamera(camera) {
   $('camera-name').textContent = camera;
@@ -142,11 +142,13 @@ function render() {
   for (const [camera, stream] of Object.entries(data.cameras)) {
     const index = sampleIndex(stream.times, currentNs);
     const img = document.getElementById('img-' + camera);
-    if (index >= 0 && !img.dataset.loading && img.dataset.index !== String(index)) {
+    const width = Math.max(160, Math.min(1600, Math.ceil(img.clientWidth * (window.devicePixelRatio || 1))));
+    const request = `${index}:${width}`;
+    if (index >= 0 && !img.dataset.loading && img.dataset.request !== request) {
       img.dataset.loading = '1';
-      img.src = frameUrl(data.episode_id, camera, index);
-      img.dataset.index = String(index);
-    } else if (index < 0 && !img.dataset.loading) { img.removeAttribute('src'); img.dataset.index = ''; }
+      img.src = frameUrl(data.episode_id, camera, index, width);
+      img.dataset.request = request;
+    } else if (index < 0 && !img.dataset.loading) { img.removeAttribute('src'); img.dataset.request = ''; }
     document.getElementById('meta-' + camera).textContent = index < 0
       ? '等待首帧' : `采样于 ${seconds(stream.times[index])}`;
   }
@@ -180,7 +182,7 @@ function setup(episode) {
     const title = document.createElement('span'); title.className = 'camera-title'; title.textContent = camera;
     const detail = document.createElement('span'); detail.id = 'meta-' + camera; detail.className = 'detail';
     card.append(img, title, detail);
-    card.addEventListener('click', () => setPrimaryCamera(camera));
+    card.addEventListener('click', () => { setPrimaryCamera(camera); render(); });
     cameraCards[camera] = card;
   }
   const cameras = Object.keys(data.cameras);

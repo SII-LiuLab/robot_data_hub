@@ -1,11 +1,12 @@
 """Local viewer for the exported dataset contract (format 2.x)."""
 
 import argparse
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
 from pathlib import Path
 import re
+from threading import Lock
 from urllib.parse import parse_qs, urlsplit
 
 import pyarrow.parquet as pq
@@ -73,42 +74,61 @@ class FrameReader:
     """Decode by display-order frame index; MP4 timestamps are never acquisition times."""
 
     def __init__(self):
+        self.lock = Lock()
         self.path = None
         self.container = None
         self.iterator = None
         self.index = -1
-        self.last_image = None
+        self.last_frame = None
+        self.last_images = {}
 
     def close(self):
         if self.container is not None:
             self.container.close()
-        self.path = self.container = self.iterator = self.last_image = None
+        self.path = self.container = self.iterator = self.last_frame = None
+        self.last_images = {}
         self.index = -1
 
-    def get(self, path, index):
+    def get(self, path, index, width):
+        with self.lock:
+            return self._get(path, index, width)
+
+    def _get(self, path, index, width):
         if self.path != path or index < self.index:
             self.close()
             import av
             self.container = av.open(str(path))
+            self.container.streams.video[0].thread_type = 'AUTO'
             self.iterator = self.container.decode(video=0)
             self.path = path
         while self.index < index:
             frame = next(self.iterator)
             self.index += 1
             if self.index == index:
-                image = BytesIO()
-                frame.to_image().save(image, format='JPEG', quality=85)
-                self.last_image = image.getvalue()
-        return self.last_image
+                self.last_frame = frame
+                self.last_images = {}
+        if width not in self.last_images:
+            frame = self.last_frame
+            if frame.width > width:
+                height = max(1, round(frame.height * width / frame.width))
+                frame = frame.reformat(width=width, height=height, format='rgb24')
+            image = frame.to_image()
+            output = BytesIO()
+            image.save(output, format='JPEG', quality=80)
+            self.last_images[width] = output.getvalue()
+        return self.last_images[width]
 
 
 def serve(root, host, port):
     version, episodes = read_dataset(root)
     readers = {}
+    readers_lock = Lock()
     page = (HERE / 'index.html').read_bytes()
     pose_script = (HERE / 'pose3d.js').read_bytes()
 
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+
         def reply(self, status, body, content_type):
             try:
                 self.send_response(status)
@@ -144,9 +164,15 @@ def serve(root, host, port):
                     index = int(query['index'][0])
                     if index < 0:
                         raise ValueError('Negative frame index')
+                    width = int(query.get('width', ['1280'])[0])
+                    if not 64 <= width <= 2048:
+                        raise ValueError('Invalid frame width')
                     path = root / 'episodes' / episode_id / 'rgb' / f'{camera}.mp4'
-                    reader = readers.setdefault(path, FrameReader())
-                    self.reply(200, reader.get(path, index), 'image/jpeg')
+                    with readers_lock:
+                        reader = readers.get(path)
+                        if reader is None:
+                            reader = readers[path] = FrameReader()
+                    self.reply(200, reader.get(path, index, width), 'image/jpeg')
                     return
                 else:
                     self.reply(404, b'Not found', 'text/plain; charset=utf-8')
@@ -158,7 +184,7 @@ def serve(root, host, port):
                 self.reply(400, str(exc).encode('utf-8'), 'text/plain; charset=utf-8')
 
     try:
-        with HTTPServer((host, port), Handler) as server:
+        with ThreadingHTTPServer((host, port), Handler) as server:
             print(f'Export viewer: http://{host}:{server.server_port}/')
             server.serve_forever()
     finally:
