@@ -6,9 +6,10 @@ export class Pose3D {
     this.canvas = canvas;
     this.stream = stream;
     this.side = side;
-    this.yaw = -3 * Math.PI / 4;
-    this.pitch = 0.6;
-    this.zoom = 1;
+    // Look forward along the initial tool +X from behind and above it.
+    // Opposite lateral offsets approximate looking from the head toward each hand.
+    this.homeView = {yaw: Math.PI / 2 + (side === 'left' ? -0.28 : 0.28), pitch: 0.4, zoom: 1};
+    Object.assign(this, this.homeView);
     this.index = -1;
     this.openness = null;
     this.drag = null;
@@ -169,7 +170,8 @@ export class Pose3D {
   }
 
   reset() {
-    this.yaw = -3 * Math.PI / 4; this.pitch = 0.6; this.zoom = 1; this.draw();
+    Object.assign(this, this.homeView);
+    this.draw();
   }
 
   trailStart(index) {
