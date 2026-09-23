@@ -39,13 +39,18 @@
   <button id="play" type="button">播放</button>
   <input id="timeline" aria-label="共同时间轴" type="range" min="0" max="1000" value="0">
   <span id="time">0.000 s</span>
+  <label>拖尾 <select id="trail">
+    <option value="500000000">0.5 秒</option>
+    <option value="2000000000" selected>2 秒</option>
+    <option value="5000000000">5 秒</option>
+  </select></label>
 </div>
 <p id="error" role="alert"></p>
 <div class="comparison">
   <div id="cameras"></div>
   <div class="poses" id="poses"></div>
 </div>
-<p class="legend">3D 轨迹和当前 TCP 位姿按各臂自己的固定参考系显示；红 X、绿 Y、蓝 Z 是工具轴，白色线段示意夹爪开合。左右臂参考系不一定相同。</p>
+<p class="legend">3D 视图只显示当前时刻之前最近一段已走过的轨迹，颜色由淡到亮指向当前位姿；不显示更早或未来的路径。红 X、绿 Y、蓝 Z 是工具轴，白色线段示意夹爪开合。左右臂各用自己的固定参考系。</p>
 <section class="panel"><h2>指令区间</h2><ol id="instructions"></ol></section>
 <script src="/pose3d.js"></script>
 <script>
@@ -130,6 +135,7 @@ function setup(episode) {
     detail.append(time, gripper); header.append(title, reset); card.append(header, canvas, detail);
     $('poses').append(card);
     poseViews[side] = new Pose3D(canvas, data.streams[side + '_eef'], side);
+    poseViews[side].setTrailDuration(Number($('trail').value));
     reset.addEventListener('click', () => poseViews[side].reset());
   }
   render();
@@ -154,6 +160,9 @@ function tick(now) {
 }
 $('timeline').addEventListener('input', () => {
   if (data) { currentNs = Number($('timeline').value) / 1000 * data.end_ns; render(); }
+});
+$('trail').addEventListener('change', () => {
+  Object.values(poseViews).forEach(view => view.setTrailDuration(Number($('trail').value)));
 });
 $('play').addEventListener('click', () => {
   if (!data) return;

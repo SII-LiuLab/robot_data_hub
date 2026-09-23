@@ -10,7 +10,10 @@ class Pose3D {
     this.index = -2;
     this.openness = null;
     this.drag = null;
-    this.bounds = this.getBounds();
+    this.trailNs = 2e9;
+    this.baseSpan = this.getTrailSpan();
+    this.center = [0, 0, 0];
+    this.span = this.baseSpan;
     this.onDown = event => {
       this.drag = [event.clientX, event.clientY];
       canvas.setPointerCapture(event.pointerId);
@@ -51,15 +54,35 @@ class Pose3D {
     this.yaw = -0.75; this.pitch = 0.42; this.zoom = 1; this.draw();
   }
 
-  getBounds() {
-    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-    for (const pose of this.stream.values) for (let axis = 0; axis < 3; axis++) {
-      min[axis] = Math.min(min[axis], pose[axis]);
-      max[axis] = Math.max(max[axis], pose[axis]);
+  trailStart(index) {
+    const times = this.stream.times;
+    const cutoff = times[index] - this.trailNs;
+    let low = 0, high = index;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (times[middle] < cutoff) low = middle + 1; else high = middle;
     }
-    const center = min.map((v, i) => (v + max[i]) / 2);
-    const span = Math.max(0.2, ...min.map((v, i) => max[i] - v));
-    return {min, max, center, span};
+    return low;
+  }
+
+  getTrailSpan() {
+    const values = this.stream.values;
+    const distances = [];
+    const step = Math.max(1, Math.ceil(values.length / 400));
+    for (let i = step; i < values.length; i += step) {
+      const previous = values[this.trailStart(i)];
+      const distance = Math.hypot(...values[i].slice(0, 3).map((v, axis) => v - previous[axis]));
+      distances.push(distance);
+    }
+    distances.sort((a, b) => a - b);
+    const typical = distances[Math.floor(distances.length * 0.75)] || 0;
+    return Math.max(0.2, typical * 2.2);
+  }
+
+  setTrailDuration(durationNs) {
+    this.trailNs = durationNs;
+    this.baseSpan = this.getTrailSpan();
+    this.draw();
   }
 
   setSample(index, openness) {
@@ -70,10 +93,10 @@ class Pose3D {
   }
 
   project(point, width, height) {
-    const p = point.map((v, i) => v - this.bounds.center[i]);
+    const p = point.map((v, i) => v - this.center[i]);
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
-    const scale = Math.min(width, height) * 0.62 / this.bounds.span * this.zoom;
+    const scale = Math.min(width, height) * 0.62 / this.span * this.zoom;
     const horizontal = cy * p[0] - sy * p[1];
     const depth = sy * p[0] + cy * p[1];
     return [width / 2 + horizontal * scale, height / 2 + (sp * depth - cp * p[2]) * scale];
@@ -98,18 +121,18 @@ class Pose3D {
     ctx.font = 'bold 13px system-ui'; ctx.fillText(label, end2d[0] + 5, end2d[1] - 5);
   }
 
-  drawPath(ctx, width, height, from, to, color, thickness) {
-    if (to < from) return;
-    const count = to - from + 1;
-    const step = Math.max(1, Math.ceil(count / 1800));
-    ctx.strokeStyle = color; ctx.lineWidth = thickness; ctx.beginPath();
-    for (let i = from; i <= to; i += step) {
-      const point = this.project(this.stream.values[i].slice(0, 3), width, height);
-      if (i === from) ctx.moveTo(...point); else ctx.lineTo(...point);
+  drawTrail(ctx, width, height, from, to) {
+    const times = this.stream.times, values = this.stream.values;
+    const step = Math.max(1, Math.ceil((to - from) / 250));
+    const color = this.side === 'left' ? '116,199,255' : '255,189,127';
+    const duration = Math.max(1, times[to] - times[from]);
+    for (let i = from; i < to;) {
+      const next = Math.min(to, i + step);
+      const age = (times[next] - times[from]) / duration;
+      this.line(ctx, values[i].slice(0, 3), values[next].slice(0, 3),
+        width, height, `rgba(${color},${(0.14 + 0.82 * age).toFixed(3)})`, 1.5 + age * 1.5);
+      i = next;
     }
-    if ((to - from) % step !== 0) ctx.lineTo(...this.project(
-      this.stream.values[to].slice(0, 3), width, height));
-    ctx.stroke();
   }
 
   draw() {
@@ -119,7 +142,22 @@ class Pose3D {
     canvas.width = Math.round(width * dpi); canvas.height = Math.round(height * dpi);
     const ctx = canvas.getContext('2d'); ctx.scale(dpi, dpi);
     ctx.fillStyle = '#0c1520'; ctx.fillRect(0, 0, width, height);
-    const {center, span} = this.bounds;
+    if (this.index < 0) {
+      ctx.fillStyle = '#aabbd0'; ctx.font = '14px system-ui';
+      ctx.fillText('等待首个 TCP 样本', 12, height / 2);
+      return;
+    }
+    const from = this.trailStart(this.index);
+    const current = this.stream.values[this.index];
+    this.center = current.slice(0, 3);
+    let maxDistance = 0;
+    const sampleStep = Math.max(1, Math.ceil((this.index - from) / 100));
+    for (let i = from; i <= this.index; i += sampleStep) {
+      maxDistance = Math.max(maxDistance, Math.hypot(...this.stream.values[i].slice(0, 3)
+        .map((value, axis) => value - this.center[axis])));
+    }
+    this.span = Math.max(this.baseSpan, maxDistance * 2);
+    const center = this.center, span = this.span;
     const floor = center[2] - span * 0.45;
     for (let step = -2; step <= 2; step++) {
       const offset = step * span / 4;
@@ -128,10 +166,8 @@ class Pose3D {
       this.line(ctx, [center[0] - span / 2, center[1] + offset, floor],
         [center[0] + span / 2, center[1] + offset, floor], width, height, '#213346');
     }
-    this.drawPath(ctx, width, height, 0, this.stream.values.length - 1, '#40556b', 1.5);
+    this.drawTrail(ctx, width, height, from, this.index);
     if (this.index >= 0) {
-      this.drawPath(ctx, width, height, 0, this.index,
-        this.side === 'left' ? '#74c7ff' : '#ffbd7f', 2.5);
       const pose = this.stream.values[this.index];
       const position = pose.slice(0, 3);
       const x = pose.slice(3, 6), y = pose.slice(6, 9);
@@ -154,6 +190,6 @@ class Pose3D {
       this.arrow(ctx, position, z, axisLength, width, height, '#77aaff', 'Z');
     }
     ctx.fillStyle = '#aabbd0'; ctx.font = '12px system-ui';
-    ctx.fillText('拖动旋转 · 滚轮缩放', 12, height - 14);
+    ctx.fillText('拖动旋转 · 滚轮缩放 · 视角跟随 TCP', 12, height - 14);
   }
 }
