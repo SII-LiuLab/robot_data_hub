@@ -119,8 +119,11 @@ def serve(root, host, port):
     episodes = read_dataset(root)
     readers = {}
     readers_lock = Lock()
-    page = (HERE / 'index.html').read_bytes()
-    pose_script = (HERE / 'pose3d.js').read_bytes()
+    static_files = {
+        '/': ((HERE / 'index.html').read_bytes(), 'text/html; charset=utf-8'),
+        **{'/' + name: ((HERE / name).read_bytes(), 'text/javascript; charset=utf-8')
+           for name in ('pose3d.js', 'vendor/three.module.min.js', 'vendor/three.core.min.js')},
+    }
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
@@ -141,11 +144,9 @@ def serve(root, host, port):
             parsed = urlsplit(self.path)
             query = parse_qs(parsed.query)
             try:
-                if parsed.path == '/':
-                    self.reply(200, page, 'text/html; charset=utf-8')
-                    return
-                if parsed.path == '/pose3d.js':
-                    self.reply(200, pose_script, 'text/javascript; charset=utf-8')
+                if parsed.path in static_files:
+                    body, content_type = static_files[parsed.path]
+                    self.reply(200, body, content_type)
                     return
                 if parsed.path == '/api/dataset':
                     payload = {'episodes': list(episodes)}

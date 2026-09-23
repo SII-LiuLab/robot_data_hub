@@ -1,26 +1,56 @@
-/* Contract-only TCP pose display. Each arm is drawn in its own fixed reference frame. */
-class Pose3D {
+/* Contract-only TCP pose display. Each arm keeps its own fixed reference frame. */
+import * as THREE from './vendor/three.module.min.js';
+
+export class Pose3D {
   constructor(canvas, stream, side) {
     this.canvas = canvas;
     this.stream = stream;
     this.side = side;
-    this.yaw = -Math.PI / 2;
-    this.pitch = 0.55;
+    this.yaw = -3 * Math.PI / 4;
+    this.pitch = 0.6;
     this.zoom = 1;
-    this.index = -2;
+    this.index = -1;
     this.openness = null;
     this.drag = null;
     this.trailNs = 2e9;
     const initial = stream.values[0];
-    const x = initial.slice(3, 6), y = initial.slice(6, 9);
-    const z = [x[1] * y[2] - x[2] * y[1],
-               x[2] * y[0] - x[0] * y[2],
-               x[0] * y[1] - x[1] * y[0]];
-    this.initialAxes = [x, y, z];
+    const x = new THREE.Vector3().fromArray(initial, 3);
+    const y = new THREE.Vector3().fromArray(initial, 6);
+    const z = new THREE.Vector3().crossVectors(x, y);
+    this.initialAxes = [x.toArray(), y.toArray(), z.toArray()];
     const frame = this.getEpisodeFrame();
-    this.center = frame.center;
     this.span = frame.span;
+    this.axisLength = Math.max(0.055, Math.min(0.2, this.span * 0.18));
+    this.radius = frame.radius + this.axisLength * 1.2;
+    // A rigid change of basis: fixed reference -> initial tool axes, centered on the episode.
+    this.viewFromReference = new THREE.Matrix4().makeBasis(x, y, z)
+      .setPosition(...frame.center).invert();
+    try {
+      this.renderer = new THREE.WebGLRenderer({canvas, antialias: true});
+    } catch (error) {
+      throw new Error('无法显示 3D 位姿，请检查浏览器是否支持 WebGL 2 并启用硬件加速。', {cause: error});
+    }
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setClearColor('#0c1520');
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(40, 1, this.radius / 1000, this.radius * 100);
+    this.camera.up.set(0, 0, 1);
+    const fill = new THREE.HemisphereLight(0xe6f0ff, 0x394254, 1.8);
+    fill.position.set(0, 0, 1);
+    this.scene.add(fill);
+    const key = new THREE.DirectionalLight(0xffffff, 3);
+    key.position.set(-3, -4, 6);
+    this.scene.add(key);
+    this.content = new THREE.Group();
+    this.scene.add(this.content);
+    this.createGeometry();
+    this.message = document.createElement('span');
+    this.message.className = 'pose-empty';
+    this.message.textContent = '等待首个 TCP 样本';
+    canvas.parentElement.append(this.message);
     this.onDown = event => {
+      if (event.button !== 0) return;
       this.drag = [event.clientX, event.clientY];
       canvas.setPointerCapture(event.pointerId);
     };
@@ -42,9 +72,76 @@ class Pose3D {
     canvas.addEventListener('pointermove', this.onMove);
     canvas.addEventListener('pointerup', this.onUp);
     canvas.addEventListener('pointercancel', this.onUp);
+    canvas.addEventListener('lostpointercapture', this.onUp);
     canvas.addEventListener('wheel', this.onWheel, {passive: false});
     this.resizeObserver = new ResizeObserver(() => this.draw());
     this.resizeObserver.observe(canvas);
+    this.draw();
+  }
+
+  createGeometry() {
+    const grid = new THREE.GridHelper(this.span * 1.3, 10, 0x35495e, 0x213346);
+    grid.rotation.x = Math.PI / 2;
+    grid.position.z = -this.span * 0.45;
+    this.content.add(grid);
+    this.tool = new THREE.Group();
+    this.tool.matrixAutoUpdate = false;
+    this.content.add(this.tool);
+    const glyph = new THREE.Group();
+    glyph.scale.setScalar(this.axisLength);
+    this.tool.add(glyph);
+    const shaftGeometry = new THREE.CylinderGeometry(0.025, 0.025, 0.76, 20);
+    const headGeometry = new THREE.ConeGeometry(0.075, 0.24, 24);
+    const axes = [
+      {direction: new THREE.Vector3(1, 0, 0), color: '#ff6767', label: 'X'},
+      {direction: new THREE.Vector3(0, 1, 0), color: '#79db8b', label: 'Y'},
+      {direction: new THREE.Vector3(0, 0, 1), color: '#77aaff', label: 'Z'},
+    ];
+    for (const {direction, color, label} of axes) {
+      const material = new THREE.MeshStandardMaterial({color, roughness: 0.4});
+      const arrow = new THREE.Group();
+      arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+      const shaft = new THREE.Mesh(shaftGeometry, material);
+      shaft.position.y = 0.38;
+      const head = new THREE.Mesh(headGeometry, material);
+      head.position.y = 0.88;
+      arrow.add(shaft, head);
+      glyph.add(arrow);
+      const text = document.createElement('canvas');
+      text.width = 128; text.height = 64;
+      const ctx = text.getContext('2d');
+      ctx.font = 'bold 44px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.strokeStyle = '#0c1520'; ctx.lineWidth = 5;
+      ctx.strokeText(label, 64, 32);
+      ctx.fillStyle = color; ctx.fillText(label, 64, 32);
+      const map = new THREE.CanvasTexture(text);
+      map.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map, sizeAttenuation: false,
+        depthTest: true, depthWrite: false}));
+      sprite.position.copy(direction).multiplyScalar(this.axisLength * 1.18);
+      sprite.scale.set(0.085, 0.0425, 1);
+      this.tool.add(sprite);
+    }
+    // The opaque sphere hides the roots of arrows pointing behind the TCP.
+    const white = new THREE.MeshStandardMaterial({color: '#e9eef5', roughness: 0.5});
+    const tcp = new THREE.Mesh(new THREE.SphereGeometry(0.12, 32, 20), white);
+    glyph.add(tcp);
+    this.fingers = [-1, 1].map(sign => {
+      const finger = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.075, 0.1), white);
+      finger.position.x = 0.075;
+      finger.userData.sign = sign;
+      glyph.add(finger);
+      return finger;
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(251 * 3), 3)
+      .setUsage(THREE.DynamicDrawUsage));
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(251 * 3), 3)
+      .setUsage(THREE.DynamicDrawUsage));
+    geometry.setDrawRange(0, 0);
+    this.trail = new THREE.Line(geometry, new THREE.LineBasicMaterial({vertexColors: true}));
+    this.trail.frustumCulled = false;
+    this.content.add(this.trail);
   }
 
   destroy() {
@@ -53,11 +150,26 @@ class Pose3D {
     this.canvas.removeEventListener('pointermove', this.onMove);
     this.canvas.removeEventListener('pointerup', this.onUp);
     this.canvas.removeEventListener('pointercancel', this.onUp);
+    this.canvas.removeEventListener('lostpointercapture', this.onUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    this.message.remove();
+    const resources = new Set();
+    this.scene.traverse(object => {
+      if (object.geometry) resources.add(object.geometry);
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!material) continue;
+        if (material.map) resources.add(material.map);
+        resources.add(material);
+      }
+    });
+    resources.forEach(resource => resource.dispose());
+    this.renderer.dispose();
+    this.renderer.forceContextLoss();
   }
 
   reset() {
-    this.yaw = -Math.PI / 2; this.pitch = 0.55; this.zoom = 1; this.draw();
+    this.yaw = -3 * Math.PI / 4; this.pitch = 0.6; this.zoom = 1; this.draw();
   }
 
   trailStart(index) {
@@ -83,114 +195,77 @@ class Pose3D {
       });
     }
     const middle = min.map((value, i) => (value + max[i]) / 2);
-    return {center: this.pointFromInitialAxes(origin, middle),
-            span: Math.max(0.25, ...min.map((value, i) => max[i] - value)) * 1.8};
+    const ranges = min.map((value, i) => max[i] - value);
+    return {
+      center: origin.map((value, i) => value + this.initialAxes.reduce(
+        (sum, axis, j) => sum + axis[i] * middle[j], 0)),
+      span: Math.max(0.25, ...ranges) * 1.8,
+      radius: Math.max(0.125, Math.hypot(...ranges) / 2),
+    };
   }
 
   setSample(index, openness) {
     if (this.index === index && this.openness === openness) return;
     this.index = index;
     this.openness = openness;
+    if (index >= 0) {
+      const pose = this.stream.values[index];
+      const x = new THREE.Vector3().fromArray(pose, 3);
+      const y = new THREE.Vector3().fromArray(pose, 6);
+      const z = new THREE.Vector3().crossVectors(x, y);
+      const referenceFromTool = new THREE.Matrix4().makeBasis(x, y, z).setPosition(...pose.slice(0, 3));
+      this.tool.matrix.multiplyMatrices(this.viewFromReference, referenceFromTool);
+      for (const finger of this.fingers) {
+        finger.visible = openness !== null;
+        finger.position.y = finger.userData.sign * (0.06 + (openness ?? 0) * 0.38);
+      }
+      this.updateTrail();
+    }
     this.draw();
   }
 
-  project(point, width, height) {
-    const offset = point.map((v, i) => v - this.center[i]);
-    const p = this.initialAxes.map(axis => axis.reduce(
-      (sum, value, i) => sum + value * offset[i], 0));
-    const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
-    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
-    const scale = Math.min(width, height) * 0.62 / this.span * this.zoom;
-    const horizontal = cy * p[0] - sy * p[1];
-    const depth = sy * p[0] + cy * p[1];
-    return [width / 2 + horizontal * scale, height / 2 + (sp * depth - cp * p[2]) * scale];
-  }
-
-  pointFromInitialAxes(center, local) {
-    return center.map((value, i) => value + this.initialAxes.reduce(
-      (sum, axis, j) => sum + axis[i] * local[j], 0));
-  }
-
-  line(ctx, a, b, width, height, color, thickness = 1) {
-    const start = this.project(a, width, height), end = this.project(b, width, height);
-    ctx.strokeStyle = color; ctx.lineWidth = thickness;
-    ctx.beginPath(); ctx.moveTo(...start); ctx.lineTo(...end); ctx.stroke();
-    return end;
-  }
-
-  arrow(ctx, origin, direction, length, width, height, color, label) {
-    const tip = origin.map((v, i) => v + direction[i] * length);
-    const start2d = this.project(origin, width, height);
-    const end2d = this.line(ctx, origin, tip, width, height, color, 3);
-    const angle = Math.atan2(end2d[1] - start2d[1], end2d[0] - start2d[0]);
-    ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(...end2d);
-    ctx.lineTo(end2d[0] - 9 * Math.cos(angle - 0.45), end2d[1] - 9 * Math.sin(angle - 0.45));
-    ctx.lineTo(end2d[0] - 9 * Math.cos(angle + 0.45), end2d[1] - 9 * Math.sin(angle + 0.45));
-    ctx.closePath(); ctx.fill();
-    ctx.font = 'bold 13px system-ui'; ctx.fillText(label, end2d[0] + 5, end2d[1] - 5);
-  }
-
-  drawTrail(ctx, width, height, from, to) {
-    const times = this.stream.times, values = this.stream.values;
+  updateTrail() {
+    const from = this.trailStart(this.index), to = this.index;
     const step = Math.max(1, Math.ceil((to - from) / 250));
-    const color = this.side === 'left' ? '116,199,255' : '255,189,127';
+    const times = this.stream.times, values = this.stream.values;
     const duration = Math.max(1, times[to] - times[from]);
-    for (let i = from; i < to;) {
-      const next = Math.min(to, i + step);
-      const age = (times[next] - times[from]) / duration;
-      this.line(ctx, values[i].slice(0, 3), values[next].slice(0, 3),
-        width, height, `rgba(${color},${(0.14 + 0.82 * age).toFixed(3)})`, 1.5 + age * 1.5);
-      i = next;
+    const positions = this.trail.geometry.getAttribute('position');
+    const colors = this.trail.geometry.getAttribute('color');
+    const bright = new THREE.Color(this.side === 'left' ? '#74c7ff' : '#ffbd7f');
+    const dark = new THREE.Color('#0c1520'), color = new THREE.Color();
+    const point = new THREE.Vector3();
+    let count = 0;
+    for (let i = from;; i = Math.min(to, i + step)) {
+      point.fromArray(values[i]).applyMatrix4(this.viewFromReference);
+      positions.setXYZ(count, point.x, point.y, point.z);
+      const age = (times[i] - times[from]) / duration;
+      color.copy(dark).lerp(bright, 0.14 + 0.82 * age);
+      colors.setXYZ(count, color.r, color.g, color.b);
+      count++;
+      if (i === to) break;
     }
+    this.trail.geometry.setDrawRange(0, count);
+    positions.needsUpdate = colors.needsUpdate = true;
   }
 
   draw() {
-    const canvas = this.canvas, width = canvas.clientWidth, height = canvas.clientHeight;
+    const width = this.canvas.clientWidth, height = this.canvas.clientHeight;
     if (!width || !height) return;
-    const dpi = window.devicePixelRatio || 1;
-    canvas.width = Math.round(width * dpi); canvas.height = Math.round(height * dpi);
-    const ctx = canvas.getContext('2d'); ctx.scale(dpi, dpi);
-    ctx.fillStyle = '#0c1520'; ctx.fillRect(0, 0, width, height);
-    if (this.index < 0) {
-      ctx.fillStyle = '#aabbd0'; ctx.font = '14px system-ui';
-      ctx.fillText('等待首个 TCP 样本', 12, height / 2);
-      return;
+    if (width !== this.width || height !== this.height) {
+      this.width = width; this.height = height;
+      this.renderer.setSize(width, height, false);
+      this.camera.aspect = width / height;
+      this.camera.updateProjectionMatrix();
     }
-    const from = this.trailStart(this.index);
-    const center = this.center, span = this.span;
-    for (let step = -2; step <= 2; step++) {
-      const offset = step * span / 4;
-      this.line(ctx,
-        this.pointFromInitialAxes(center, [offset, -span / 2, -span * 0.45]),
-        this.pointFromInitialAxes(center, [offset, span / 2, -span * 0.45]),
-        width, height, '#213346');
-      this.line(ctx,
-        this.pointFromInitialAxes(center, [-span / 2, offset, -span * 0.45]),
-        this.pointFromInitialAxes(center, [span / 2, offset, -span * 0.45]),
-        width, height, '#213346');
-    }
-    this.drawTrail(ctx, width, height, from, this.index);
-    if (this.index >= 0) {
-      const pose = this.stream.values[this.index];
-      const position = pose.slice(0, 3);
-      const x = pose.slice(3, 6), y = pose.slice(6, 9);
-      const z = [x[1] * y[2] - x[2] * y[1],
-                 x[2] * y[0] - x[0] * y[2],
-                 x[0] * y[1] - x[1] * y[0]];
-      const axisLength = Math.max(0.055, Math.min(0.2, span * 0.18));
-      if (this.openness !== null) {
-        const halfGap = axisLength * (0.06 + this.openness * 0.38);
-        for (const sign of [-1, 1]) {
-          const root = position.map((v, i) => v + y[i] * sign * halfGap - x[i] * axisLength * 0.15);
-          const tip = root.map((v, i) => v + x[i] * axisLength * 0.45);
-          this.line(ctx, root, tip, width, height, '#f2f5fa', 3);
-        }
-      }
-      const point = this.project(position, width, height);
-      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(...point, 5, 0, 2 * Math.PI); ctx.fill();
-      this.arrow(ctx, position, x, axisLength, width, height, '#ff6767', 'X');
-      this.arrow(ctx, position, y, axisLength, width, height, '#79db8b', 'Y');
-      this.arrow(ctx, position, z, axisLength, width, height, '#77aaff', 'Z');
-    }
+    const halfFov = THREE.MathUtils.degToRad(this.camera.fov / 2);
+    const fitAngle = Math.min(halfFov, Math.atan(Math.tan(halfFov) * this.camera.aspect));
+    const distance = this.radius * 1.1 / Math.sin(fitAngle) / this.zoom;
+    // Explicit right-handed orbit camera with +Z up. Positive pitch is above the XY plane.
+    this.camera.position.set(-Math.cos(this.pitch) * Math.sin(this.yaw),
+      -Math.cos(this.pitch) * Math.cos(this.yaw), Math.sin(this.pitch)).multiplyScalar(distance);
+    this.camera.lookAt(0, 0, 0);
+    this.content.visible = this.index >= 0;
+    this.message.hidden = this.index >= 0;
+    this.renderer.render(this.scene, this.camera);
   }
 }

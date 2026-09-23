@@ -63,8 +63,10 @@
   .pose + .pose { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
   .pose-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
   .quiet { border: 0; background: transparent; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; padding: 4px 6px; }
+  .pose-viewport { position: relative; }
   .pose canvas { display: block; width: 100%; height: clamp(260px, 31vh, 350px); border-radius: 9px; touch-action: none; cursor: grab; }
   .pose canvas:active { cursor: grabbing; }
+  .pose-empty { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #aabbd0; font-size: 14px; pointer-events: none; }
   .pose-meta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--muted);
     font-size: 12px; font-variant-numeric: tabular-nums; }
   .guide { margin: 16px 0 0; color: var(--muted); font-size: 13px; }
@@ -104,11 +106,11 @@
     </section>
   </main>
   <details class="guide"><summary>视图说明</summary>
-    <p>彩色短线是当前 TCP 前的运动轨迹，白点是当前 TCP；红 X、绿 Y、蓝 Z 是工具轴。拖动位姿视图可旋转，滚轮可缩放。相机和各状态流按同一个 episode 时钟选择最近的已采样值。初始观看方向参考各臂的起始工具坐标系；导出数据没有相机外参，因此它不是经过标定的视频叠加。</p>
+    <p>彩色短线是当前 TCP 前的运动轨迹，白球中心是当前 TCP；红 X、绿 Y、蓝 Z 是工具轴，白色实体夹指示意夹爪开合。视图使用透视、光照和前后遮挡帮助判断三维朝向，夹指与坐标轴的尺寸仅作示意。拖动位姿视图可旋转，滚轮可缩放。相机和各状态流按同一个 episode 时钟选择最近的已采样值。初始观看方向参考各臂的起始工具坐标系；导出数据没有相机外参，因此它不是经过标定的视频叠加。</p>
   </details>
 </div>
-<script src="/pose3d.js"></script>
-<script>
+<script type="module">
+import {Pose3D} from '/pose3d.js';
 const $ = id => document.getElementById(id);
 let data = null, currentNs = 0, playing = false, lastTick = 0, generation = 0;
 let poseViews = {}, cameraCards = {};
@@ -195,10 +197,11 @@ function setup(episode) {
     const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'quiet'; reset.textContent = '重置视角';
     head.append(title, reset);
     const canvas = document.createElement('canvas'); canvas.setAttribute('aria-label', title.textContent + ' 3D 位姿');
+    const viewport = document.createElement('div'); viewport.className = 'pose-viewport'; viewport.append(canvas);
     const meta = document.createElement('div'); meta.className = 'pose-meta';
     const time = document.createElement('span'); time.id = 'meta-' + side;
     const gripper = document.createElement('span'); gripper.id = 'gripper-' + side;
-    meta.append(time, gripper); card.append(head, canvas, meta); $('poses').append(card);
+    meta.append(time, gripper); card.append(head, viewport, meta); $('poses').append(card);
     poseViews[side] = new Pose3D(canvas, data.streams[side + '_eef'], side);
     reset.addEventListener('click', () => poseViews[side].reset());
   }

@@ -113,3 +113,38 @@ class ExportViewerTests(unittest.TestCase):
         self.assertEqual(stream.thread_type, 'AUTO')
         frame.reformat.assert_called_once_with(width=320, height=200, format='rgb24')
         reader.close()
+
+    def test_serves_local_3d_modules_without_exposing_other_files(self):
+        results = {}
+
+        class FakeServer:
+            server_port = 8765
+
+            def __init__(self, address, handler):
+                self.handler = handler
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def serve_forever(self):
+                for path in ('/', '/pose3d.js', '/vendor/three.module.min.js',
+                             '/vendor/three.core.min.js', '/vendor/../../export_viewer.py'):
+                    handler = self.handler.__new__(self.handler)
+                    handler.path = path
+                    handler.reply = Mock()
+                    handler.do_GET()
+                    results[path] = handler.reply.call_args.args
+
+        with patch('scripts.viewer.export_viewer.ThreadingHTTPServer', FakeServer):
+            serve(self.root, '127.0.0.1', 8765)
+        self.assertIn(b'type="module"', results['/'][1])
+        for path in ('/pose3d.js', '/vendor/three.module.min.js', '/vendor/three.core.min.js'):
+            status, body, content_type = results[path]
+            self.assertEqual(status, 200)
+            self.assertTrue(body)
+            self.assertTrue(content_type.startswith('text/javascript'))
+        self.assertIn(b'three.core.min.js', results['/vendor/three.module.min.js'][1])
+        self.assertEqual(results['/vendor/../../export_viewer.py'][0], 404)
