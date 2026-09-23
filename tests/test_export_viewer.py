@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -112,6 +113,49 @@ class ExportViewerTests(unittest.TestCase):
             self.assertEqual(reader.get(Path('video.mp4'), 0, 320), b'jpeg')
         self.assertEqual(stream.thread_type, 'AUTO')
         frame.reformat.assert_called_once_with(width=320, height=200, format='rgb24')
+        reader.close()
+
+    def test_frame_reader_seeks_to_display_index_for_distant_scrubs(self):
+        decoded = []
+
+        class FakeFrame:
+            width = 320
+            height = 180
+            time_base = Fraction(1, 30)
+
+            def __init__(self, index):
+                self.pts = index
+
+            def to_image(self):
+                index = self.pts
+                return SimpleNamespace(save=lambda output, **_: output.write(str(index).encode()))
+
+        class FakeContainer:
+            def __init__(self):
+                self.cursor = 0
+                self.streams = SimpleNamespace(video=[SimpleNamespace(
+                    thread_type=None, average_rate=Fraction(30),
+                    time_base=Fraction(1, 30), start_time=0)])
+
+            def seek(self, target, **_):
+                self.cursor = target // 10 * 10
+
+            def decode(self, **_):
+                while True:
+                    index = self.cursor
+                    self.cursor += 1
+                    decoded.append(index)
+                    yield FakeFrame(index)
+
+            def close(self):
+                pass
+
+        fake_av = SimpleNamespace(open=lambda _: FakeContainer())
+        reader = FrameReader()
+        with patch.dict(sys.modules, {'av': fake_av}):
+            self.assertEqual(reader.get(Path('video.mp4'), 450, 320), b'450')
+            self.assertEqual(reader.get(Path('video.mp4'), 27, 320), b'27')
+        self.assertLess(len(decoded), 25)
         reader.close()
 
     def test_serves_local_3d_modules_without_exposing_other_files(self):

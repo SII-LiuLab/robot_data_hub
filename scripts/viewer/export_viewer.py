@@ -4,6 +4,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
+from fractions import Fraction
 from pathlib import Path
 import re
 from threading import Lock
@@ -77,6 +78,7 @@ class FrameReader:
         self.index = -1
         self.last_frame = None
         self.last_images = {}
+        self.seeked = False
 
     def close(self):
         if self.container is not None:
@@ -84,25 +86,61 @@ class FrameReader:
         self.path = self.container = self.iterator = self.last_frame = None
         self.last_images = {}
         self.index = -1
+        self.seeked = False
+
+    def _open(self, path):
+        self.close()
+        import av
+        self.container = av.open(str(path))
+        self.container.streams.video[0].thread_type = 'AUTO'
+        self.iterator = self.container.decode(video=0)
+        self.path = path
+
+    def _seek(self, index):
+        stream = self.container.streams.video[0]
+        # Exported MP4s have one display frame per tick of their 30 Hz clock.
+        # Other videos retain the sequential, display-order fallback.
+        if (getattr(stream, 'average_rate', None) != 30
+                or not getattr(stream, 'time_base', None)
+                or not hasattr(self.container, 'seek')):
+            return False
+        origin = stream.start_time or 0
+        target = origin + int(Fraction(index, 30) / stream.time_base)
+        self.container.seek(target, stream=stream, backward=True)
+        self.iterator = self.container.decode(video=0)
+        self.index = -1
+        self.seeked = True
+        return True
 
     def get(self, path, index, width):
         with self.lock:
             return self._get(path, index, width)
 
     def _get(self, path, index, width):
-        if self.path != path or index < self.index:
-            self.close()
-            import av
-            self.container = av.open(str(path))
-            self.container.streams.video[0].thread_type = 'AUTO'
-            self.iterator = self.container.decode(video=0)
-            self.path = path
+        if self.path != path:
+            self._open(path)
+        if index < self.index or index - self.index > 120:
+            if not self._seek(index):
+                if index < self.index:
+                    self._open(path)
         while self.index < index:
             frame = next(self.iterator)
-            self.index += 1
+            if self.seeked:
+                stream = self.container.streams.video[0]
+                if frame.pts is None or frame.time_base is None:
+                    self._open(path)
+                    continue
+                ordinal = round((frame.pts - (stream.start_time or 0)) * frame.time_base * 30)
+                if ordinal < 0 or (self.index >= 0 and ordinal != self.index + 1) or ordinal > index:
+                    self._open(path)
+                    continue
+                self.index = ordinal
+            else:
+                self.index += 1
             if self.index == index:
                 self.last_frame = frame
                 self.last_images = {}
+                self.seeked = False
         if width not in self.last_images:
             frame = self.last_frame
             if frame.width > width:
