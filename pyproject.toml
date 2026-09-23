@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 models = ["numpy>=1.24"]
 model-preview = ["numpy>=1.24", "mujoco>=3.3,<4"]
+viewer = ["pillow>=10"]
 
 [build-system]
 requires = ["setuptools>=68"]

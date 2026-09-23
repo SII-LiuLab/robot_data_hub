@@ -13,17 +13,19 @@ scripts/
 ├── convert/    # 转换到目标格式数据契约（每数据集一个入口 + 公共函数）
 │   ├── abc130k.py
 │   └── export_common.py
-└── robot/      # 机器人模型工具（URDF 解析、FK、可视化、包校验）
+├── robot/      # 机器人模型工具（URDF 解析、FK、可视化、包校验）
     ├── urdf_model.py
     ├── kinematics.py
     ├── fk.py
     ├── show_models.py
     └── check_packages.py
+└── viewer/     # 仅消费目标格式契约的本地检查工具
 ```
 
 - `download/`：只依赖各源数据集自身的契约，产出 `dataset/raw/` 与 `dataset/manifests/`。
 - `convert/`：把源数据对齐到唯一的目标格式契约（见 [`../docs/export-contract.md`](../docs/export-contract.md)）。`export_common.py` 是跨数据集共用的 Parquet/视频写出逻辑。
 - `robot/`：面向成品 URDF 模型包的工具。`urdf_model.py` 与 `kinematics.py` 是库，`fk.py`、`show_models.py`、`check_packages.py` 是命令行入口；`convert/` 也复用前两者。
+- `viewer/`：读取导出数据契约的本地 viewer，不读取原始数据或机器人模型。用法见 [`../docs/export-viewer.md`](../docs/export-viewer.md)。
 
 ## 运行方式
 

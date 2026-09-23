@@ -21,6 +21,7 @@
 
 - 源格式说明：[`docs/abc130k-source.md`](docs/abc130k-source.md)。
 - 转换到统一导出格式：`python scripts/convert/abc130k.py`；EEF 使用 YAM 模型与实测关节角 FK。用法与 TCP 定义见 [`docs/abc130k-conversion.md`](docs/abc130k-conversion.md)。
+- 查看转换结果：`python scripts/viewer/export_viewer.py <导出目录>`，只读取统一导出契约；安装与使用见 [`docs/export-viewer.md`](docs/export-viewer.md)。
 - 数据范围：YAM 双臂真实数据，覆盖 `data/train/` 下全部任务目录（当前 201 个），优先保证任务多样性。
 - 抽样方式：每个任务目录随机选取 30 条完整轨迹，不足 30 条则全部保留；固定随机种子为 `42`。
 - 预计规模：最多 6,030 条轨迹，约占原数据集 130,703 条轨迹的 4.6%（按轨迹数量计算）。

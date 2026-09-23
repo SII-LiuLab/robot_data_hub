@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Export dataset viewer</title>
+<style>
+  :root { color-scheme: dark; font: 15px system-ui, sans-serif; background: #101722; color: #e8edf5; }
+  body { max-width: 1500px; margin: auto; padding: 24px; }
+  h1 { font-size: 24px; margin: 0 0 16px; }
+  h2 { font-size: 17px; margin: 0 0 10px; }
+  .bar, .panel { background: #1a2534; border: 1px solid #344255; border-radius: 10px; padding: 15px; margin-bottom: 16px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+  select, button, input { font: inherit; background: #253449; color: #eef3fa; border: 1px solid #4b5e77; border-radius: 5px; padding: 6px 9px; }
+  button { cursor: pointer; }
+  input[type=range] { flex: 1; min-width: 240px; padding: 0; }
+  #time { font-variant-numeric: tabular-nums; min-width: 85px; text-align: right; }
+  .comparison { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(340px, 1fr); gap: 16px; align-items: start; }
+  #cameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .camera { background: #1a2534; border: 1px solid #344255; border-radius: 10px; padding: 12px; }
+  .camera img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #070b10; }
+  .detail { color: #aebcd0; font-size: 13px; margin-top: 7px; }
+  .poses { display: grid; gap: 16px; position: sticky; top: 16px; }
+  .pose { background: #1a2534; border: 1px solid #344255; border-radius: 10px; padding: 12px; }
+  .pose header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .pose header h2 { margin: 0 0 8px; }
+  .pose canvas { width: 100%; height: 260px; display: block; border-radius: 5px; touch-action: none; cursor: grab; }
+  .pose canvas:active { cursor: grabbing; }
+  .pose .detail { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px; }
+  .legend { color: #aebcd0; font-size: 13px; margin: 8px 0 0; }
+  @media (max-width: 1000px) { .comparison { grid-template-columns: 1fr; } .poses { position: static; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); } }
+  #error { color: #ffb3a7; white-space: pre-wrap; }
+  #instructions { margin: 0; padding-left: 20px; }
+  #instructions li { margin: 5px 0; color: #aebcd0; }
+  #instructions li.active { color: #fff; font-weight: 600; }
+</style>
+<h1>Export dataset viewer <small id="version"></small></h1>
+<div class="bar"><label>Episode <select id="episode"></select></label><span id="count"></span></div>
+<div class="bar">
+  <button id="play" type="button">播放</button>
+  <input id="timeline" aria-label="共同时间轴" type="range" min="0" max="1000" value="0">
+  <span id="time">0.000 s</span>
+</div>
+<p id="error" role="alert"></p>
+<div class="comparison">
+  <div id="cameras"></div>
+  <div class="poses" id="poses"></div>
+</div>
+<p class="legend">3D 轨迹和当前 TCP 位姿按各臂自己的固定参考系显示；红 X、绿 Y、蓝 Z 是工具轴，白色线段示意夹爪开合。左右臂参考系不一定相同。</p>
+<section class="panel"><h2>指令区间</h2><ol id="instructions"></ol></section>
+<script src="/pose3d.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let data = null, currentNs = 0, playing = false, lastTick = 0, generation = 0;
+let poseViews = {};
+const seconds = ns => (ns / 1e9).toFixed(3) + ' s';
+function sampleIndex(times, target) {
+  let lo = 0, hi = times.length;
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (times[mid] <= target) lo = mid + 1; else hi = mid; }
+  return lo - 1;
+}
+function frameUrl(id, camera, index) {
+  return `/api/frame?id=${encodeURIComponent(id)}&camera=${encodeURIComponent(camera)}&index=${index}`;
+}
+function render() {
+  if (!data) return;
+  const end = Math.max(data.end_ns, 1);
+  $('timeline').value = Math.round(currentNs / end * 1000);
+  $('time').textContent = seconds(currentNs) + ' / ' + seconds(data.end_ns);
+  for (const [camera, stream] of Object.entries(data.cameras)) {
+    const index = sampleIndex(stream.times, currentNs);
+    const img = document.getElementById('img-' + camera);
+    if (index >= 0 && !img.dataset.loading && img.dataset.index !== String(index)) {
+      img.dataset.loading = '1';
+      img.src = frameUrl(data.episode_id, camera, index);
+      img.dataset.index = String(index);
+    } else if (index < 0 && !img.dataset.loading) { img.removeAttribute('src'); img.dataset.index = ''; }
+    document.getElementById('meta-' + camera).textContent = index < 0
+      ? '等待首帧' : `帧 ${index + 1}/${stream.frames} · 采样 ${seconds(stream.times[index])}`;
+  }
+  for (const side of ['left', 'right']) {
+    const pose = data.streams[side + '_eef'];
+    const gripper = data.streams[side + '_gripper'];
+    const poseIndex = sampleIndex(pose.times, currentNs);
+    const gripperIndex = sampleIndex(gripper.times, currentNs);
+    const openness = gripperIndex < 0 ? null : gripper.values[gripperIndex];
+    poseViews[side].setSample(poseIndex, openness);
+    document.getElementById('meta-' + side).textContent = poseIndex < 0
+      ? '等待首个 TCP 样本'
+      : `TCP 采样 ${seconds(pose.times[poseIndex])} · ${poseIndex + 1}/${pose.times.length}`;
+    document.getElementById('gripper-' + side).textContent = openness === null
+      ? '夹爪：等待首样本' : `夹爪开合 ${Math.round(openness * 100)}%`;
+  }
+  [...$('instructions').children].forEach((li, i) => {
+    const ins = data.instructions[i];
+    li.classList.toggle('active', ins.start_ns <= currentNs && currentNs < ins.end_ns ||
+      currentNs === data.end_ns && ins.end_ns === data.end_ns);
+  });
+}
+function setup(episode) {
+  Object.values(poseViews).forEach(view => view.destroy());
+  poseViews = {};
+  data = episode; currentNs = 0; playing = false; $('play').textContent = '播放';
+  $('cameras').replaceChildren(); $('poses').replaceChildren(); $('instructions').replaceChildren();
+  for (const camera of Object.keys(data.cameras)) {
+    const card = document.createElement('div'); card.className = 'camera';
+    const title = document.createElement('h2'); title.textContent = camera;
+    const img = document.createElement('img'); img.id = 'img-' + camera; img.alt = camera + ' 当前帧';
+    img.onload = () => { img.dataset.loading = ''; render(); };
+    img.onerror = () => {
+      img.dataset.loading = '';
+      $('error').textContent = `无法解码相机 ${camera} 的视频帧。请检查 PyAV 和 Pillow。`;
+    };
+    const detail = document.createElement('div'); detail.id = 'meta-' + camera; detail.className = 'detail';
+    card.append(title, img, detail); $('cameras').append(card);
+  }
+  data.instructions.forEach(ins => {
+    const li = document.createElement('li');
+    li.textContent = `${seconds(ins.start_ns)} – ${seconds(ins.end_ns)} · ${ins.text}`;
+    $('instructions').append(li);
+  });
+  for (const side of ['left', 'right']) {
+    const card = document.createElement('section'); card.className = 'pose';
+    const header = document.createElement('header');
+    const title = document.createElement('h2'); title.textContent = side === 'left' ? '左臂 TCP · 3D' : '右臂 TCP · 3D';
+    const reset = document.createElement('button'); reset.type = 'button'; reset.textContent = '重置视角';
+    const canvas = document.createElement('canvas'); canvas.setAttribute('aria-label', title.textContent);
+    const detail = document.createElement('div'); detail.className = 'detail';
+    const time = document.createElement('span'); time.id = 'meta-' + side;
+    const gripper = document.createElement('span'); gripper.id = 'gripper-' + side;
+    detail.append(time, gripper); header.append(title, reset); card.append(header, canvas, detail);
+    $('poses').append(card);
+    poseViews[side] = new Pose3D(canvas, data.streams[side + '_eef'], side);
+    reset.addEventListener('click', () => poseViews[side].reset());
+  }
+  render();
+}
+async function load(id) {
+  const token = ++generation;
+  $('error').textContent = '';
+  try {
+    const res = await fetch('/api/episode?id=' + encodeURIComponent(id));
+    if (!res.ok) throw new Error(await res.text());
+    const episode = await res.json();
+    if (token === generation) setup(episode);
+  } catch (error) { $('error').textContent = String(error); }
+}
+function tick(now) {
+  if (playing && data) {
+    if (lastTick) currentNs = Math.min(data.end_ns, currentNs + (now - lastTick) * 1e6);
+    if (currentNs >= data.end_ns) { playing = false; $('play').textContent = '播放'; }
+    render();
+  }
+  lastTick = now; requestAnimationFrame(tick);
+}
+$('timeline').addEventListener('input', () => {
+  if (data) { currentNs = Number($('timeline').value) / 1000 * data.end_ns; render(); }
+});
+$('play').addEventListener('click', () => {
+  if (!data) return;
+  if (currentNs >= data.end_ns) currentNs = 0;
+  playing = !playing; lastTick = 0; $('play').textContent = playing ? '暂停' : '播放'; render();
+});
+$('episode').addEventListener('change', event => load(event.target.value));
+fetch('/api/dataset').then(async res => {
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}).then(dataset => {
+  $('version').textContent = 'v' + dataset.format_version;
+  $('count').textContent = dataset.episodes.length + ' episodes';
+  dataset.episodes.forEach(id => {
+    const option = document.createElement('option'); option.value = id; option.textContent = id;
+    $('episode').append(option);
+  });
+  load(dataset.episodes[0]);
+}).catch(error => { $('error').textContent = String(error); });
+requestAnimationFrame(tick);
+</script>
+</html>
