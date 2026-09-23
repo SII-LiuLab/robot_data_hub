@@ -87,11 +87,6 @@ class Pose3D {
             span: Math.max(0.25, ...min.map((value, i) => max[i] - value)) * 1.8};
   }
 
-  setTrailDuration(durationNs) {
-    this.trailNs = durationNs;
-    this.draw();
-  }
-
   setSample(index, openness) {
     if (this.index === index && this.openness === openness) return;
     this.index = index;
@@ -197,7 +192,5 @@ class Pose3D {
       this.arrow(ctx, position, y, axisLength, width, height, '#79db8b', 'Y');
       this.arrow(ctx, position, z, axisLength, width, height, '#77aaff', 'Z');
     }
-    ctx.fillStyle = '#aabbd0'; ctx.font = '12px system-ui';
-    ctx.fillText('固定视角 · 拖动旋转 · 滚轮缩放', 12, height - 14);
   }
 }
