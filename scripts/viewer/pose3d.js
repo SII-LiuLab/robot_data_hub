@@ -4,16 +4,22 @@ class Pose3D {
     this.canvas = canvas;
     this.stream = stream;
     this.side = side;
-    this.yaw = -0.75;
-    this.pitch = 0.42;
+    this.yaw = -Math.PI / 2;
+    this.pitch = 0.55;
     this.zoom = 1;
     this.index = -2;
     this.openness = null;
     this.drag = null;
     this.trailNs = 2e9;
-    this.baseSpan = this.getTrailSpan();
-    this.center = [0, 0, 0];
-    this.span = this.baseSpan;
+    const initial = stream.values[0];
+    const x = initial.slice(3, 6), y = initial.slice(6, 9);
+    const z = [x[1] * y[2] - x[2] * y[1],
+               x[2] * y[0] - x[0] * y[2],
+               x[0] * y[1] - x[1] * y[0]];
+    this.initialAxes = [x, y, z];
+    const frame = this.getEpisodeFrame();
+    this.center = frame.center;
+    this.span = frame.span;
     this.onDown = event => {
       this.drag = [event.clientX, event.clientY];
       canvas.setPointerCapture(event.pointerId);
@@ -51,7 +57,7 @@ class Pose3D {
   }
 
   reset() {
-    this.yaw = -0.75; this.pitch = 0.42; this.zoom = 1; this.draw();
+    this.yaw = -Math.PI / 2; this.pitch = 0.55; this.zoom = 1; this.draw();
   }
 
   trailStart(index) {
@@ -65,23 +71,24 @@ class Pose3D {
     return low;
   }
 
-  getTrailSpan() {
-    const values = this.stream.values;
-    const distances = [];
-    const step = Math.max(1, Math.ceil(values.length / 400));
-    for (let i = step; i < values.length; i += step) {
-      const previous = values[this.trailStart(i)];
-      const distance = Math.hypot(...values[i].slice(0, 3).map((v, axis) => v - previous[axis]));
-      distances.push(distance);
+  getEpisodeFrame() {
+    const origin = this.stream.values[0].slice(0, 3);
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const pose of this.stream.values) {
+      const offset = pose.slice(0, 3).map((value, i) => value - origin[i]);
+      this.initialAxes.forEach((axis, i) => {
+        const value = axis.reduce((sum, component, j) => sum + component * offset[j], 0);
+        min[i] = Math.min(min[i], value);
+        max[i] = Math.max(max[i], value);
+      });
     }
-    distances.sort((a, b) => a - b);
-    const typical = distances[Math.floor(distances.length * 0.75)] || 0;
-    return Math.max(0.2, typical * 2.2);
+    const middle = min.map((value, i) => (value + max[i]) / 2);
+    return {center: this.pointFromInitialAxes(origin, middle),
+            span: Math.max(0.25, ...min.map((value, i) => max[i] - value)) * 1.8};
   }
 
   setTrailDuration(durationNs) {
     this.trailNs = durationNs;
-    this.baseSpan = this.getTrailSpan();
     this.draw();
   }
 
@@ -93,13 +100,20 @@ class Pose3D {
   }
 
   project(point, width, height) {
-    const p = point.map((v, i) => v - this.center[i]);
+    const offset = point.map((v, i) => v - this.center[i]);
+    const p = this.initialAxes.map(axis => axis.reduce(
+      (sum, value, i) => sum + value * offset[i], 0));
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
     const scale = Math.min(width, height) * 0.62 / this.span * this.zoom;
     const horizontal = cy * p[0] - sy * p[1];
     const depth = sy * p[0] + cy * p[1];
     return [width / 2 + horizontal * scale, height / 2 + (sp * depth - cp * p[2]) * scale];
+  }
+
+  pointFromInitialAxes(center, local) {
+    return center.map((value, i) => value + this.initialAxes.reduce(
+      (sum, axis, j) => sum + axis[i] * local[j], 0));
   }
 
   line(ctx, a, b, width, height, color, thickness = 1) {
@@ -148,23 +162,17 @@ class Pose3D {
       return;
     }
     const from = this.trailStart(this.index);
-    const current = this.stream.values[this.index];
-    this.center = current.slice(0, 3);
-    let maxDistance = 0;
-    const sampleStep = Math.max(1, Math.ceil((this.index - from) / 100));
-    for (let i = from; i <= this.index; i += sampleStep) {
-      maxDistance = Math.max(maxDistance, Math.hypot(...this.stream.values[i].slice(0, 3)
-        .map((value, axis) => value - this.center[axis])));
-    }
-    this.span = Math.max(this.baseSpan, maxDistance * 2);
     const center = this.center, span = this.span;
-    const floor = center[2] - span * 0.45;
     for (let step = -2; step <= 2; step++) {
       const offset = step * span / 4;
-      this.line(ctx, [center[0] + offset, center[1] - span / 2, floor],
-        [center[0] + offset, center[1] + span / 2, floor], width, height, '#213346');
-      this.line(ctx, [center[0] - span / 2, center[1] + offset, floor],
-        [center[0] + span / 2, center[1] + offset, floor], width, height, '#213346');
+      this.line(ctx,
+        this.pointFromInitialAxes(center, [offset, -span / 2, -span * 0.45]),
+        this.pointFromInitialAxes(center, [offset, span / 2, -span * 0.45]),
+        width, height, '#213346');
+      this.line(ctx,
+        this.pointFromInitialAxes(center, [-span / 2, offset, -span * 0.45]),
+        this.pointFromInitialAxes(center, [span / 2, offset, -span * 0.45]),
+        width, height, '#213346');
     }
     this.drawTrail(ctx, width, height, from, this.index);
     if (this.index >= 0) {
@@ -190,6 +198,6 @@ class Pose3D {
       this.arrow(ctx, position, z, axisLength, width, height, '#77aaff', 'Z');
     }
     ctx.fillStyle = '#aabbd0'; ctx.font = '12px system-ui';
-    ctx.fillText('拖动旋转 · 滚轮缩放 · 视角跟随 TCP', 12, height - 14);
+    ctx.fillText('固定视角 · 拖动旋转 · 滚轮缩放', 12, height - 14);
   }
 }

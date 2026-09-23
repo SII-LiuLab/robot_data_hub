@@ -5,7 +5,7 @@
 <title>Export dataset viewer</title>
 <style>
   :root { color-scheme: dark; font: 15px system-ui, sans-serif; background: #101722; color: #e8edf5; }
-  body { max-width: 1500px; margin: auto; padding: 24px; }
+  body { max-width: 1700px; margin: auto; padding: 24px; }
   h1 { font-size: 24px; margin: 0 0 16px; }
   h2 { font-size: 17px; margin: 0 0 10px; }
   .bar, .panel { background: #1a2534; border: 1px solid #344255; border-radius: 10px; padding: 15px; margin-bottom: 16px; }
@@ -14,16 +14,20 @@
   button { cursor: pointer; }
   input[type=range] { flex: 1; min-width: 240px; padding: 0; }
   #time { font-variant-numeric: tabular-nums; min-width: 85px; text-align: right; }
-  .comparison { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(340px, 1fr); gap: 16px; align-items: start; }
-  #cameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  #cameras { display: grid; gap: 12px; }
+  #otherCameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
   .camera { background: #1a2534; border: 1px solid #344255; border-radius: 10px; padding: 12px; }
+  .camera.secondary { cursor: pointer; }
+  .camera.secondary h2 { font-size: 14px; }
+  .camera.secondary .detail { font-size: 11px; }
   .camera img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #070b10; }
   .detail { color: #aebcd0; font-size: 13px; margin-top: 7px; }
   .poses { display: grid; gap: 16px; position: sticky; top: 16px; }
   .pose { background: #1a2534; border: 1px solid #344255; border-radius: 10px; padding: 12px; }
   .pose header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .pose header h2 { margin: 0 0 8px; }
-  .pose canvas { width: 100%; height: 260px; display: block; border-radius: 5px; touch-action: none; cursor: grab; }
+  .pose canvas { width: 100%; height: 330px; display: block; border-radius: 5px; touch-action: none; cursor: grab; }
   .pose canvas:active { cursor: grabbing; }
   .pose .detail { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px; }
   .legend { color: #aebcd0; font-size: 13px; margin: 8px 0 0; }
@@ -34,7 +38,7 @@
   #instructions li.active { color: #fff; font-weight: 600; }
 </style>
 <h1>Export dataset viewer <small id="version"></small></h1>
-<div class="bar"><label>Episode <select id="episode"></select></label><span id="count"></span></div>
+<div class="bar"><label>Episode <select id="episode"></select></label><span id="count"></span><label>主画面 <select id="primary-camera"></select></label></div>
 <div class="bar">
   <button id="play" type="button">播放</button>
   <input id="timeline" aria-label="共同时间轴" type="range" min="0" max="1000" value="0">
@@ -47,16 +51,16 @@
 </div>
 <p id="error" role="alert"></p>
 <div class="comparison">
-  <div id="cameras"></div>
+  <div id="cameras"><div id="primaryCamera"></div><div id="otherCameras"></div></div>
   <div class="poses" id="poses"></div>
 </div>
-<p class="legend">3D 视图只显示当前时刻之前最近一段已走过的轨迹，颜色由淡到亮指向当前位姿；不显示更早或未来的路径。红 X、绿 Y、蓝 Z 是工具轴，白色线段示意夹爪开合。左右臂各用自己的固定参考系。</p>
+<p class="legend">主画面默认优先选 top 视角，可在上方切换。3D 视图以各臂的起始工具方向建立固定观看方向；白点会随 TCP 移动，短拖尾由淡到亮指向它。红 X、绿 Y、蓝 Z 是工具轴，白色线段示意夹爪开合。导出数据不含相机外参，因此 3D 朝向只是便于与 ego 画面对照的初始视角。</p>
 <section class="panel"><h2>指令区间</h2><ol id="instructions"></ol></section>
 <script src="/pose3d.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let data = null, currentNs = 0, playing = false, lastTick = 0, generation = 0;
-let poseViews = {};
+let poseViews = {}, cameraCards = {};
 const seconds = ns => (ns / 1e9).toFixed(3) + ' s';
 function sampleIndex(times, target) {
   let lo = 0, hi = times.length;
@@ -65,6 +69,13 @@ function sampleIndex(times, target) {
 }
 function frameUrl(id, camera, index) {
   return `/api/frame?id=${encodeURIComponent(id)}&camera=${encodeURIComponent(camera)}&index=${index}`;
+}
+function setPrimaryCamera(camera) {
+  for (const [id, card] of Object.entries(cameraCards)) {
+    card.classList.toggle('primary', id === camera);
+    card.classList.toggle('secondary', id !== camera);
+    (id === camera ? $('primaryCamera') : $('otherCameras')).append(card);
+  }
 }
 function render() {
   if (!data) return;
@@ -104,8 +115,10 @@ function render() {
 function setup(episode) {
   Object.values(poseViews).forEach(view => view.destroy());
   poseViews = {};
+  cameraCards = {};
   data = episode; currentNs = 0; playing = false; $('play').textContent = '播放';
-  $('cameras').replaceChildren(); $('poses').replaceChildren(); $('instructions').replaceChildren();
+  $('primaryCamera').replaceChildren(); $('otherCameras').replaceChildren();
+  $('primary-camera').replaceChildren(); $('poses').replaceChildren(); $('instructions').replaceChildren();
   for (const camera of Object.keys(data.cameras)) {
     const card = document.createElement('div'); card.className = 'camera';
     const title = document.createElement('h2'); title.textContent = camera;
@@ -116,8 +129,20 @@ function setup(episode) {
       $('error').textContent = `无法解码相机 ${camera} 的视频帧。请检查 PyAV 和 Pillow。`;
     };
     const detail = document.createElement('div'); detail.id = 'meta-' + camera; detail.className = 'detail';
-    card.append(title, img, detail); $('cameras').append(card);
+    card.append(title, img, detail);
+    card.addEventListener('click', () => {
+      $('primary-camera').value = camera;
+      setPrimaryCamera(camera);
+    });
+    cameraCards[camera] = card;
+    const option = document.createElement('option'); option.value = camera; option.textContent = camera;
+    $('primary-camera').append(option);
   }
+  const cameras = Object.keys(data.cameras);
+  const preferred = cameras.find(id => id === 'top') ||
+    cameras.find(id => id === 'top_left') || cameras.find(id => id === 'top_right') || cameras[0];
+  $('primary-camera').value = preferred;
+  setPrimaryCamera(preferred);
   data.instructions.forEach(ins => {
     const li = document.createElement('li');
     li.textContent = `${seconds(ins.start_ns)} – ${seconds(ins.end_ns)} · ${ins.text}`;
@@ -170,6 +195,7 @@ $('play').addEventListener('click', () => {
   playing = !playing; lastTick = 0; $('play').textContent = playing ? '暂停' : '播放'; render();
 });
 $('episode').addEventListener('change', event => load(event.target.value));
+$('primary-camera').addEventListener('change', event => setPrimaryCamera(event.target.value));
 fetch('/api/dataset').then(async res => {
   if (!res.ok) throw new Error(await res.text());
   return res.json();
