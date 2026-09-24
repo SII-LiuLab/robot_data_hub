@@ -21,12 +21,15 @@ if not __package__:
 
 from scripts.convert.export_common import write_state, write_video_index
 from scripts.robot.kinematics import fk_poses
-from scripts.robot.urdf_model import parse_urdf
+from scripts.robot.urdf_model import Robot, parse_urdf
 
 ROOT = Path(__file__).resolve().parents[2]
 STATE_FIELDS = ('state/left_effector/position', 'state/right_effector/position',
-                'state/joint/position', 'state/waist/position',
+                'state/end/arm_position', 'state/end/arm_orientation', 'state/waist/position',
                 'state/robot/position', 'state/robot/orientation')
+# Provisional closed-pad center from the public CRT120S geometry; see the
+# conversion document. This is not a per-robot TCP calibration.
+DEFAULT_TCP_OFFSET = (0., 0., 0.207056)
 CAMERA_PREFIX = 'observation.images.'
 ARCHIVE_NAME = re.compile(r'^(\d+)_(\d+)\.tar\.gz$')
 PARQUET_NAME = re.compile(r'^data/data/chunk-\d+/(episode_\d+)\.parquet$')
@@ -57,7 +60,7 @@ def source_fields(info):
         raise ValueError('Expected AgiBot G2 (robot_type g2a)')
     fields = features['observation.state']['field_descriptions']
     indices = {key: fields[key]['indices'] for key in STATE_FIELDS}
-    lengths = (1, 1, 14, 5, 3, 4)
+    lengths = (1, 1, 6, 8, 5, 3, 4)
     for key, count in zip(STATE_FIELDS, lengths):
         allowed = (0, count) if key.startswith('state/robot/') else (count,)
         if len(indices[key]) not in allowed:
@@ -71,56 +74,70 @@ def source_fields(info):
     return indices, cameras
 
 
-class G2FK:
-    """G2 model FK, from the mobile base to the fixed gripper grasp center."""
+def pose_matrix(position, quaternion):
+    """Source position in metres and quaternion in xyzw order."""
+    position, quat = np.asarray(position, dtype=float), np.asarray(quaternion, dtype=float)
+    if position.shape != (3,) or quat.shape != (4,) or not np.isfinite(position).all() or not np.isfinite(quat).all():
+        raise ValueError('Invalid or nonfinite source pose')
+    norm = np.linalg.norm(quat)
+    if norm < 1e-6 or abs(norm - 1) > 0.1:
+        raise ValueError('Invalid source quaternion')
+    x, y, z, w = quat / norm
+    transform = np.eye(4)
+    transform[:3, :3] = np.array([
+        [1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
+        [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
+        [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)],
+    ])
+    transform[:3, 3] = position
+    return transform
 
-    def __init__(self, directory):
+
+class G2FK:
+    """Torso FK plus recorded flange poses; never recompute the arm with crsB."""
+
+    def __init__(self, directory, tcp_offset=DEFAULT_TCP_OFFSET):
         manifest = json.loads((directory / 'robot.json').read_text())
         if manifest['robot'] != 'agibot_g2':
             raise ValueError('AgiBot World 2026 requires the G2 model')
-        self.robot = parse_urdf(directory / manifest['urdf'])
-        self.arm_joints = [manifest['arms'][side]['joints'] for side in ('left', 'right')]
-        # In the model the base link's +Z points from the gripper mount toward
-        # the fingers. Closed fingertip link origins lie at z=0.10547 m.
-        self.tcp = np.array([0., 0., 0.10547, 1.])
-        # Contract axes expressed in gripper_base_link: approach +Z, back +X,
-        # lateral +Y = +X cross +Z = -Y.
-        self.axes = np.array([[0., 1., 0.], [0., 0., -1.], [1., 0., 0.]])
+        model = parse_urdf(directory / manifest['urdf'])
+        parents = {joint.child: joint for joint in model.joints}
+        chain, link = [], 'arm_base_link'
+        while link in parents:
+            joint = parents[link]
+            chain.append(joint)
+            link = joint.parent
+        if link != 'base_link' or {j.name for j in chain if j.type != 'fixed'} != {f'body_joint{i}' for i in range(1, 6)}:
+            raise ValueError('Expected G2 base_link to arm_base_link torso chain')
+        self.robot = Robot(model.name, tuple([link] + [j.child for j in reversed(chain)]), tuple(chain))
+        offset = np.asarray(tcp_offset, dtype=float)
+        if offset.shape != (3,) or not np.isfinite(offset).all():
+            raise ValueError('TCP offset must contain three finite metres')
+        self.tcp = np.append(offset, 1.)
+        # Columns are contract X, Y, Z expressed in the SOURCE FLANGE:
+        # approach +Z, lateral -Y, back (wrist camera side) +X.
+        self.axes = np.array([[0., 0., 1.], [0., -1., 0.], [1., 0., 0.]])
 
     def poses(self, state, indices, stationary_base=False):
         def field(key):
             return np.asarray([state[i] for i in indices[key]], dtype=float)
 
-        joints = field('state/joint/position')
         waist = field('state/waist/position')
-        if not np.isfinite(joints).all() or not np.isfinite(waist).all():
-            raise ValueError('Nonfinite measured joint or waist state')
-        values = dict(zip(self.arm_joints[0] + self.arm_joints[1], joints))
-        values.update(zip((f'body_joint{i}' for i in range(1, 6)), waist))
-        transforms = fk_poses(self.robot, values)
+        if not np.isfinite(waist).all():
+            raise ValueError('Nonfinite measured waist state')
+        values = dict(zip((f'body_joint{i}' for i in range(1, 6)), waist))
+        torso = fk_poses(self.robot, values)['arm_base_link']
         if indices['state/robot/position']:
-            position = field('state/robot/position')
-            quat = field('state/robot/orientation')  # source xyzw
-            if not np.isfinite(position).all() or not np.isfinite(quat).all():
-                raise ValueError('Nonfinite mobile base pose')
-            norm = np.linalg.norm(quat)
-            if norm < 1e-6 or abs(norm - 1) > 0.1:
-                raise ValueError('Invalid mobile base quaternion')
-            x, y, z, w = quat / norm
-            world = np.eye(4)
-            world[:3, :3] = np.array([
-                [1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
-                [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
-                [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)],
-            ])
-            world[:3, 3] = position
+            world = pose_matrix(field('state/robot/position'), field('state/robot/orientation'))
         elif stationary_base:
             world = np.eye(4)
         else:
             raise ValueError('Mobile base pose is absent without verified stationary-base data')
         result = []
-        for side in ('left', 'right'):
-            transform = world @ transforms[f'arm_{side}_gripper_base_link']
+        positions = field('state/end/arm_position').reshape(2, 3)
+        orientations = field('state/end/arm_orientation').reshape(2, 4)
+        for position, orientation in zip(positions, orientations):
+            transform = world @ torso @ pose_matrix(position, orientation)
             rotation = transform[:3, :3] @ self.axes
             point = transform @ self.tcp
             result.append(np.concatenate((point[:3], rotation[:, 0], rotation[:, 1])).tolist())
@@ -130,8 +147,8 @@ class G2FK:
 def openness(value):
     if not math.isfinite(value):
         raise ValueError('Nonfinite measured gripper position')
-    # G2 source position: 0 closed, approximately -0.91 fully open.
-    return min(1., max(0., -float(value) / 0.91))
+    # Checked against wrist RGB: 0 open, negative values close the fingers.
+    return min(1., max(0., 1. + float(value) / 0.91))
 
 
 def verify_stationary_base(info, actions):
@@ -312,7 +329,7 @@ def convert_archive(path, staged, fk, episode_limit=None):
     ]
 
 
-def convert(source, output, model_dir, limit=None, limit_episodes=None):
+def convert(source, output, model_dir, limit=None, limit_episodes=None, tcp_offset=DEFAULT_TCP_OFFSET):
     if output.exists():
         raise ValueError(f'Output already exists: {output}')
     archives = sorted(source.rglob('*.tar.gz')) if source.is_dir() else [source]
@@ -320,7 +337,7 @@ def convert(source, output, model_dir, limit=None, limit_episodes=None):
         archives = archives[:limit]
     if not archives:
         raise ValueError(f'No tar.gz archives found under {source}')
-    fk = G2FK(model_dir)
+    fk = G2FK(model_dir, tcp_offset)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f'.{output.name}-', dir=output.parent) as temporary:
         staged = Path(temporary) / 'dataset'
@@ -346,6 +363,8 @@ def main():
     parser.add_argument('--input-dir', type=Path, default=ROOT / 'dataset/raw/AgiBotWorld2026')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'dataset/processed/AgiBotWorld2026')
     parser.add_argument('--model-dir', type=Path, default=ROOT / 'assets/robot_models/agibot_g2')
+    parser.add_argument('--tcp-offset', type=float, nargs=3, default=DEFAULT_TCP_OFFSET,
+                        metavar=('X', 'Y', 'Z'), help='grasp center in source flange, metres; default is provisional CRT120S geometry')
     parser.add_argument('--limit', type=int, help='convert only the first N sorted archives')
     parser.add_argument('--limit-episodes', type=int, help='convert only the first N episodes across archives')
     args = parser.parse_args()
@@ -354,7 +373,7 @@ def main():
     if args.limit_episodes is not None and args.limit_episodes < 1:
         parser.error('--limit-episodes must be positive')
     try:
-        convert(args.input_dir, args.output_dir, args.model_dir, args.limit, args.limit_episodes)
+        convert(args.input_dir, args.output_dir, args.model_dir, args.limit, args.limit_episodes, args.tcp_offset)
     except (ValueError, OSError, KeyError, tarfile.TarError) as exc:
         parser.exit(1, f'Error: {exc}\n')
 
