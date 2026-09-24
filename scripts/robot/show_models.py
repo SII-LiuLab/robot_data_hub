@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open a MuJoCo viewer with the three canonical robot models side by side.
+"""Open a MuJoCo viewer with the canonical robot models side by side.
 
     python scripts/robot/show_models.py            # interactive viewer
     python scripts/robot/show_models.py --seconds 3  # auto-close (smoke test)
@@ -29,7 +29,7 @@ import mujoco
 import mujoco.viewer
 
 MODELS = Path(__file__).resolve().parents[2] / "assets" / "robot_models"
-ROBOTS = [("yam", 0.0), ("agibot_g2", 2.4), ("galaxea_r1lite", 4.8)]
+ROBOTS = [("yam", 0.0), ("agibot_g2", 2.4), ("galaxea_r1lite", 4.8), ("galaxea_r1pro", 7.2)]
 
 
 def load_visual_spec(robot_dir: Path) -> mujoco.MjSpec:
@@ -105,8 +105,8 @@ def main() -> int:
     mujoco.mj_forward(model, data)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
-        viewer.cam.lookat[:] = [2.4, 0.0, 0.6]
-        viewer.cam.distance = 4.6
+        viewer.cam.lookat[:] = [3.6, 0.0, 0.7]
+        viewer.cam.distance = 6.5
         viewer.cam.azimuth = 110.0
         viewer.cam.elevation = -14.0
         viewer.sync()

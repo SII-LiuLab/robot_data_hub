@@ -59,10 +59,17 @@
 
 ## 统一机器人模型
 
-ABC-130K / MolmoAct2 对应 YAM，AgiBotWorld2026 对应 G2，Galaxea 对应 R1 Lite。
-三套自包含 URDF（本体、双臂、夹爪、视觉/碰撞网格、材质和清单）的入口见
+ABC-130K / MolmoAct2 对应 YAM，AgiBotWorld2026 对应 G2，Galaxea 按源 `robot_type` 分别对应 R1 Lite 或 R1 Pro。
+四套自包含 URDF（本体、双臂、夹爪、视觉/碰撞网格、材质和清单）的入口见
 [`assets/robot_models/README.md`](assets/robot_models/README.md)。
 `assets/` 不纳入 Git，完整资产公开保存在 ModelScope：
 [`BingqianWu/RobotDataHub-Assets`](https://modelscope.cn/models/BingqianWu/RobotDataHub-Assets)。
 下载该仓库后，将其中的 `assets/` 目录放回本项目根目录即可。
+R1 Pro 本地资产位于 `assets/robot_models/galaxea_r1pro/`，来自官方 GalaxeaManipSim；已随其余资产同步到上述 ModelScope 仓库。
+按本体选择的 FK 示例：
+
+```bash
+python scripts/robot/fk.py --dataset Galaxea-Open-World-Dataset --robot-type r1pro --link arm_left_link7
+```
+
 可直接用于可视化和 FK；数据集 TCP、零位及安装外参尚未逐帧标定，状态在清单中明确记录。

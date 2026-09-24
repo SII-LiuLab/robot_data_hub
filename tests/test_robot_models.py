@@ -1,4 +1,8 @@
 """Checks for distributable packages and source-verified forward kinematics."""
+import json
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 import numpy as np
@@ -9,6 +13,19 @@ from scripts.robot.check_packages import check_package, MODELS
 
 
 class ModelTests(unittest.TestCase):
+    def test_galaxea_requires_explicit_embodiment(self):
+        command = [sys.executable, str(Path(__file__).resolve().parents[1] / 'scripts/robot/fk.py'),
+                   '--dataset', 'Galaxea-Open-World-Dataset', '--link', 'arm_left_link7']
+        missing = subprocess.run(command, capture_output=True, text=True)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('requires --robot-type', missing.stderr)
+        selected = subprocess.run(command + ['--robot-type', 'r1pro'],
+                                  capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(selected.stdout)['robot'], 'galaxea_r1pro')
+        wrong = subprocess.run(command + ['--robot-type', 'r1lite'], capture_output=True, text=True)
+        self.assertNotEqual(wrong.returncode, 0)
+        self.assertIn('Unknown link', wrong.stderr)
+
     def test_yam_source_verified_pose(self):
         robot = parse_urdf(MODELS / 'yam/robot.urdf')
         poses = fk_poses(robot, {'arm_left_joint2': 1.047, 'arm_left_joint3': 1.047})
@@ -34,7 +51,7 @@ class ModelTests(unittest.TestCase):
 
     def test_all_distributable_packages(self):
         packages = sorted(MODELS.glob('*/robot.json'))
-        self.assertEqual({p.parent.name for p in packages}, {'yam', 'agibot_g2', 'galaxea_r1lite'})
+        self.assertEqual({p.parent.name for p in packages}, {'yam', 'agibot_g2', 'galaxea_r1lite', 'galaxea_r1pro'})
         for package in packages:
             with self.subTest(robot=package.parent.name):
                 self.assertEqual(check_package(package.parent)['status'], 'passed')

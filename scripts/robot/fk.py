@@ -22,6 +22,7 @@ def main():
     selector = parser.add_mutually_exclusive_group(required=True)
     selector.add_argument("--dataset")
     selector.add_argument("--model-dir", type=Path)
+    parser.add_argument("--robot-type", help="source robot_type for datasets with multiple embodiments")
     parser.add_argument("--link", required=True)
     parser.add_argument("--joints", default="{}", help="JSON object, radians/metres, canonical joint names")
     parser.add_argument("--display-pose", action="store_true")
@@ -33,9 +34,17 @@ def main():
         if args.dataset not in catalog:
             parser.error(f"Unknown dataset; choose from {', '.join(catalog)}")
         entry = catalog[args.dataset]
+        if "variants" in entry:
+            if args.robot_type not in entry["variants"]:
+                parser.error(f"{args.dataset} requires --robot-type: {', '.join(entry['variants'])}")
+            entry = entry["variants"][args.robot_type]
+        elif args.robot_type:
+            parser.error("--robot-type is only supported for datasets with model variants")
         if not entry["manifest"]:
             parser.error(entry["reason"])
         directory = (models / entry["manifest"]).parent
+    elif args.robot_type:
+        parser.error("--robot-type requires --dataset")
     manifest = json.loads((directory / "robot.json").read_text())
     robot = parse_urdf(directory / manifest["urdf"])
     values = dict(manifest["display_configuration"]) if args.display_pose else {}
