@@ -1,10 +1,48 @@
 """Shared writers for the export contract."""
 from fractions import Fraction
+import math
 from pathlib import Path
+import shutil
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+
+def seconds_to_ns(seconds):
+    if not math.isfinite(seconds):
+        raise ValueError(f'Nonfinite source timestamp: {seconds}')
+    scaled = float(seconds) * 1_000_000_000
+    if not math.isfinite(scaled):
+        raise ValueError('Source timestamp exceeds int64 nanoseconds')
+    value = round(scaled)
+    if not -(1 << 63) <= value < (1 << 63):
+        raise ValueError('Source timestamp exceeds int64 nanoseconds')
+    return value
+
+
+def copy_h264_video(source, destination, expected_frames):
+    """Copy an already compliant MP4 after checking every display frame.
+
+    Container PTS are deliberately not used as acquisition timestamps.
+    """
+    import av
+    with av.open(str(source)) as reader:
+        if (len(reader.streams) != 1 or len(reader.streams.video) != 1
+                or reader.streams.video[0].codec_context.name != 'h264'
+                or 'mp4' not in reader.format.name.split(',')):
+            raise ValueError(f'{source}: expected a video-only H.264 MP4')
+        count, size = 0, None
+        for frame in reader.decode(video=0):
+            current_size = (frame.width, frame.height)
+            if size is not None and size != current_size:
+                raise ValueError(f'{source}: video resolution changed')
+            size = current_size
+            count += 1
+        if count != expected_frames or count == 0:
+            raise ValueError(f'{source}: expected {expected_frames} frames, decoded {count}')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
 
 
 def relative_times(timestamps, origin):

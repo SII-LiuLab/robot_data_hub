@@ -43,6 +43,8 @@
 
 ## HiFi-UMI-2K 数据选取配置
 
+- 源格式与工具坐标系：[`docs/hifi-umi-source.md`](docs/hifi-umi-source.md)。
+- 转换入口：`python scripts/convert/hifi_umi.py`，夹爪按单指 0–35° 归一化；运行方式与校验规则见 [`docs/hifi-umi-conversion.md`](docs/hifi-umi-conversion.md)。
 - 数据范围：全部 398 个 shard（`chunk-XXXX/part-0000`），每个 shard 是一个自包含的 LeRobot v3 数据集，内含约 140 条 episode（轨迹）。
 - 抽样方式：先按体积取最小的 1 个 shard（当前为 `chunk-0397`），再在该 shard 内用固定随机种子 `42` 随机抽取 5 条轨迹；也可用 `scripts/download/hifi_umi_subset.py select --strategy smallest` 取最短的 5 条。
 - 说明：该数据集把同一 shard 内全部 episode 的 6 路相机视频分别拼接成一路一个 MP4，单条轨迹不是独立文件，因此下载时对远端 MP4 发起 HTTP range 请求，按 episode 的 `from/to_timestamp` 精确截取并逐帧重新编码为 H.264（CRF 18，码率与源相当）。源 shard 的 `meta` 及各表保存在 `source/`。

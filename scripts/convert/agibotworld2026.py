@@ -19,7 +19,7 @@ if not __package__:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.convert.export_common import write_state, write_video_index
+from scripts.convert.export_common import seconds_to_ns, write_state, write_video_index
 from scripts.robot.kinematics import fk_poses
 from scripts.robot.urdf_model import Robot, parse_urdf
 
@@ -34,15 +34,6 @@ CAMERA_PREFIX = 'observation.images.'
 ARCHIVE_NAME = re.compile(r'^(\d+)_(\d+)\.tar\.gz$')
 PARQUET_NAME = re.compile(r'^data/data/chunk-\d+/(episode_\d+)\.parquet$')
 VIDEO_NAME = re.compile(r'^data/videos/chunk-\d+/(observation\.images\.[^/]+)/(episode_\d+)\.mp4$')
-
-
-def seconds_to_ns(seconds):
-    if not math.isfinite(seconds):
-        raise ValueError(f'Nonfinite source timestamp: {seconds}')
-    value = round(float(seconds) * 1_000_000_000)
-    if not -(1 << 63) <= value < (1 << 63):
-        raise ValueError('Source timestamp exceeds int64 nanoseconds')
-    return value
 
 
 def camera_id(key):
