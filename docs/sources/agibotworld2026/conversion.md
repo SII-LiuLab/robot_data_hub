@@ -1,6 +1,6 @@
 # AgiBot World 2026 转换
 
-入口：`scripts/convert/agibotworld2026.py`。输出遵循[目标契约](export-contract.md)；源字段解释见[源数据契约](agibotworld2026-source.md)。
+入口：`scripts/convert/agibotworld2026.py`。输出遵循[目标契约](../../contract/export-contract.md)；源字段解释见[源数据契约](source.md)。
 
 ```bash
 # 转换前 3 条轨迹到 processed；输出路径须尚不存在
@@ -18,7 +18,7 @@ python scripts/convert/agibotworld2026.py
 
 双臂使用源记录的末端位姿；G2 URDF 只对腰部 5 关节做 FK，将随躯干的 `arm_base_link` 变换到底盘参考系。有底盘位姿时再左乘源底盘变换。缺失底盘位姿的 `task_3401/399093_399454.tar.gz` 按静止底盘约定处理，并逐集核验底盘速度命令为零。
 
-工具轴、TCP 和开合归一化详见[源数据契约](agibotworld2026-source.md)。**默认 TCP 为长指夹爪几何估计 `[0, 0, 0.207056] m`，尚无该批实机标定**；可用 `--tcp-offset X Y Z` 提供源法兰坐标下的标定值。预览尚不能作为精确 TCP 的标定结果。
+工具轴、TCP 和开合归一化详见[源数据契约](source.md)。**默认 TCP 为长指夹爪几何估计 `[0, 0, 0.207056] m`，尚无该批实机标定**；可用 `--tcp-offset X Y Z` 提供源法兰坐标下的标定值。预览尚不能作为精确 TCP 的标定结果。
 
 ### 2026-09-23 预览修正
 

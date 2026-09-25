@@ -1,6 +1,6 @@
 # 导出数据 viewer
 
-本地 viewer 只读取[目标格式数据契约](export-contract.md)定义的导出目录。不读取原始数据集、转换脚本或机器人模型；增加数据源无需修改 viewer。
+本地 viewer 只读取[目标格式数据契约](../contract/export-contract.md)定义的导出目录。不读取原始数据集、转换脚本或机器人模型；增加数据源无需修改 viewer。
 
 ```bash
 pip install -e '.[viewer]'

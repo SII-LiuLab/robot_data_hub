@@ -2,7 +2,7 @@
 
 依据[官方数据卡](https://huggingface.co/datasets/allenai/MolmoAct2-BimanualYAM-Dataset)、
 下载保留的 `source/meta/info.json`、任务表及逐帧 Parquet。这里只描述源数据语义；
-转换规则见 [molmoact2-conversion.md](molmoact2-conversion.md)。
+转换规则见 [转换说明](conversion.md)。
 
 ## 文件组织
 
@@ -82,6 +82,6 @@ MolmoAct2-BimanualYAM/
 [ 1  0  0 ]
 ```
 
-模型依据和 site 定义见 [ABC 源说明](abc130k-source.md) 与
-[YAM 工具说明](abc130k-conversion.md#关节-fk-与工具坐标系)。
+模型依据和 site 定义见 [ABC 源说明](../abc130k/source.md) 与
+[YAM 工具说明](../abc130k/conversion.md#关节-fk-与工具坐标系)。
 此处采用名义模型几何和关节定义，不代表已逐条标定真实机器人零位、工具长度或安装外参。

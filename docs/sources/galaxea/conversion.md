@@ -1,6 +1,6 @@
 # Galaxea 转换
 
-入口：`scripts/convert/galaxea.py`；支持 R1 Lite 和 R1 Pro，输出遵循[唯一导出契约](export-contract.md)。字段、参考系和工具轴定义见[源数据契约](galaxea-source.md)。
+入口：`scripts/convert/galaxea.py`；支持 R1 Lite 和 R1 Pro，输出遵循[唯一导出契约](../../contract/export-contract.md)。字段、参考系和工具轴定义见[源数据契约](source.md)。
 
 ```bash
 # 转换全部已解压任务中通过静止筛选的轨迹

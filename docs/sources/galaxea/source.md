@@ -1,6 +1,6 @@
 # Galaxea Open-World Dataset 源数据契约
 
-本文描述本项目已下载的 LeRobot v2.1 数据；版本由 `dataset/raw/Galaxea-Open-World-Dataset/subset_manifest.json` 指定。转换方法见[转换说明](galaxea-conversion.md)，输出只遵循[目标契约](export-contract.md)。
+本文描述本项目已下载的 LeRobot v2.1 数据；版本由 `dataset/raw/Galaxea-Open-World-Dataset/subset_manifest.json` 指定。转换方法见[转换说明](conversion.md)，输出只遵循[目标契约](../../contract/export-contract.md)。
 
 ## 目录与本体
 

@@ -1,7 +1,7 @@
 # MolmoAct2-BimanualYAM 转换
 
 入口：`scripts/convert/molmoact2.py`。读取本项目下载器生成的 episode 子集，
-写出[统一导出结构](export-contract.md)。字段依据见[源说明](molmoact2-source.md)。
+写出[统一导出结构](../../contract/export-contract.md)。字段依据见[源说明](source.md)。
 
 ```bash
 pip install -e .

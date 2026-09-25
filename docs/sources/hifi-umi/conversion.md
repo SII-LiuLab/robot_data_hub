@@ -1,7 +1,7 @@
 # HiFi-UMI-2K 转换
 
 入口：`scripts/convert/hifi_umi.py`。读取本项目下载器拆出的 episode 子集，输出
-遵循[目标契约](export-contract.md)。源字段依据见[源格式说明](hifi-umi-source.md)。
+遵循[目标契约](../../contract/export-contract.md)。源字段依据见[源格式说明](source.md)。
 
 ```bash
 pip install -e .

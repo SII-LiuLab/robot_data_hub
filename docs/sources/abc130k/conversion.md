@@ -1,6 +1,6 @@
 # ABC-130K 转换
 
-入口：`scripts/convert/abc130k.py`。输出遵循[目标契约](export-contract.md)。
+入口：`scripts/convert/abc130k.py`。输出遵循[目标契约](../../contract/export-contract.md)。
 
 ```bash
 pip install -e .

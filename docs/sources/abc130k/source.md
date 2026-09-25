@@ -1,6 +1,6 @@
 # ABC-130K 源格式说明
 
-依据本地随数据下载的 [YAM_DATA_FORMAT.md](../dataset/raw/ABC-130K/docs/YAM_DATA_FORMAT.md)，仅描述原始数据。
+依据本地随数据下载的 [YAM_DATA_FORMAT.md](../../../dataset/raw/ABC-130K/docs/YAM_DATA_FORMAT.md)，仅描述原始数据。
 
 ## 文件组织
 
