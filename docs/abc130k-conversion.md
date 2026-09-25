@@ -79,4 +79,5 @@ EEF 三轴按契约的固定规则对齐到 YAM 模型：
   不覆盖已有输出目录。暂存需要容纳本次完整导出的空间。
 
 公共 Parquet/视频写出逻辑位于 `scripts/convert/export_common.py`；FK 复用
-`scripts/robot/kinematics.py`，源字段映射与 YAM 工具坐标系约定位于转换入口。
+`scripts/robot/kinematics.py`，YAM 工具坐标系与 FK 封装位于
+`scripts/robot/yam.py`（与 MolmoAct2 共用），源字段映射位于转换入口。

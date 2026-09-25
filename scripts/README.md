@@ -15,10 +15,12 @@ scripts/
 │   ├── agibotworld2026.py
 │   ├── galaxea.py
 │   ├── hifi_umi.py
+│   ├── molmoact2.py
 │   └── export_common.py
 ├── robot/      # 机器人模型工具（URDF 解析、FK、可视化、包校验）
     ├── urdf_model.py
     ├── kinematics.py
+    ├── yam.py
     ├── fk.py
     ├── show_models.py
     └── check_packages.py
