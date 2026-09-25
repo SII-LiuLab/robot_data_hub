@@ -13,6 +13,7 @@ scripts/
 ├── convert/    # 转换到目标格式数据契约（每数据集一个入口 + 公共函数）
 │   ├── abc130k.py
 │   ├── agibotworld2026.py
+│   ├── galaxea.py
 │   ├── hifi_umi.py
 │   └── export_common.py
 ├── robot/      # 机器人模型工具（URDF 解析、FK、可视化、包校验）

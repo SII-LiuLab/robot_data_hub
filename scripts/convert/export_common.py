@@ -184,3 +184,51 @@ class VideoWriter:
 
     def close(self):
         self.output.close()
+
+
+def pose_matrix(position, quaternion):
+    """Source position in metres and quaternion in xyzw order."""
+    position, quat = np.asarray(position, dtype=float), np.asarray(quaternion, dtype=float)
+    if position.shape != (3,) or quat.shape != (4,) or not np.isfinite(position).all() or not np.isfinite(quat).all():
+        raise ValueError('Invalid or nonfinite source pose')
+    norm = np.linalg.norm(quat)
+    if norm < 1e-6 or abs(norm - 1) > 0.1:
+        raise ValueError('Invalid source quaternion')
+    x, y, z, w = quat / norm
+    transform = np.eye(4)
+    transform[:3, :3] = np.array([
+        [1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
+        [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
+        [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)],
+    ])
+    transform[:3, 3] = position
+    return transform
+
+
+def transcode_video(source, output, expected_frames):
+    import av
+    from fractions import Fraction
+
+    if expected_frames < 1:
+        raise ValueError('Expected a nonempty source video')
+    count = 0
+    with av.open(str(source)) as reader, av.open(str(output), 'w') as writer:
+        if len(reader.streams.video) != 1:
+            raise ValueError(f'{source}: expected one video stream')
+        stream = writer.add_stream('libx264', rate=30)
+        stream.options = {'crf': '18', 'preset': 'fast'}
+        for frame in reader.decode(video=0):
+            if count == 0:
+                stream.width, stream.height = frame.width, frame.height
+                stream.pix_fmt = 'yuv420p'
+            elif (frame.width, frame.height) != (stream.width, stream.height):
+                raise ValueError(f'{source}: video resolution changed')
+            frame.pts = count
+            frame.time_base = Fraction(1, 30)
+            for packet in stream.encode(frame):
+                writer.mux(packet)
+            count += 1
+        if count != expected_frames:
+            raise ValueError(f'{source}: decoded {count} frames; expected {expected_frames}')
+        for packet in stream.encode():
+            writer.mux(packet)

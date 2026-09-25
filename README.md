@@ -36,6 +36,9 @@
 
 ## Galaxea Open-World Dataset 数据选取配置
 
+- 源格式与两种本体的工具坐标系：[`docs/galaxea-source.md`](docs/galaxea-source.md)。
+- 转换入口：`python scripts/convert/galaxea.py`，只导出全程底盘速度命令为零的轨迹，假定底盘固定；其余直接跳过，不保存逐条原因。用法与筛选规则见 [`docs/galaxea-conversion.md`](docs/galaxea-conversion.md)。
+
 - 数据范围：`lerobot/` 下全部 227 个任务归档，每个归档是一个自包含的 LeRobot v2.1 数据集，内含多条轨迹（episode）。
 - 抽样方式：按归档体积取最小的 5 个任务归档（便于快速采样）；也可用 `scripts/download/galaxea_subset.py select --strategy random --seed 42` 随机抽样。
 - 说明：该数据集以任务归档为最小下载单元，无法单独下载单条轨迹，因此抽样单元是任务而非轨迹；5 个归档共含 244 条轨迹。
