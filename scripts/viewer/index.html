@@ -43,13 +43,14 @@
   #timeline { width: 100%; margin: 2px 0 5px; accent-color: var(--accent); cursor: pointer; }
   .scrub-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
   #time { font-variant-numeric: tabular-nums; }
-  .workspace { display: grid; grid-template-columns: minmax(0, 1.07fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+  .workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
   .surface { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
   .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 15px; margin-bottom: 14px; }
   #camera-name { color: var(--muted); font-size: 14px; font-weight: 500; margin-left: 8px; }
   .camera { display: block; width: 100%; padding: 0; text-align: left; border: 0; background: transparent; color: inherit; }
   .camera img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #0b1018; border-radius: 9px; }
   .camera.primary { cursor: default; }
+  .camera.primary img { max-height: 50vh; }
   .camera.primary:disabled { opacity: 1; color: inherit; }
   .camera-title { display: block; margin: 7px 0 0; font-weight: 600; }
   .camera.primary .camera-title { display: none; }
@@ -60,7 +61,7 @@
   .camera.secondary { cursor: pointer; border-radius: 10px; }
   .camera.secondary img { border: 2px solid transparent; }
   .camera.secondary:hover img { border-color: var(--accent); }
-  .pose + .pose { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
+  .poses { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .pose-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
   .quiet { border: 0; background: transparent; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; padding: 4px 6px; }
   .pose-viewport { position: relative; }
@@ -71,8 +72,30 @@
     font-size: 12px; font-variant-numeric: tabular-nums; }
   #error { color: var(--error); margin: 0 0 12px; white-space: pre-wrap; }
   #error:empty { display: none; }
-  @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr; } .poses { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-    .pose + .pose { border: 0; margin: 0; padding: 0; } }
+  @media (min-width: 681px) {
+    .app { height: 100dvh; min-height: 600px; display: flex; flex-direction: column; padding: 12px 0; }
+    .masthead, .task, .transport { flex-shrink: 0; margin-bottom: 10px; }
+    .task { max-height: 3lh; overflow-y: auto; }
+    .transport { padding: 8px 12px; }
+    .workspace { flex: 1; min-height: 0; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+    .surface { display: flex; flex-direction: column; min-height: 0; padding: 12px; }
+    .panel-heading { flex-shrink: 0; margin-bottom: 8px; }
+    .video-content { display: flex; flex: 1; min-height: 0; gap: 12px; }
+    #primaryCamera { flex: 1; min-width: 0; min-height: 0; }
+    .camera.primary { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+    .camera.primary img { flex: 1; min-height: 0; height: 0; max-height: none; aspect-ratio: auto; }
+    .camera.primary .detail { flex-shrink: 0; margin-top: 4px; }
+    .filmstrip { display: flex; flex-direction: column; flex: 0 0 150px; gap: 10px; margin: 0; overflow-y: auto; }
+    .filmstrip:empty { display: none; }
+    .filmstrip .camera { flex-shrink: 0; }
+    .camera-title { font-size: 12px; overflow-wrap: anywhere; margin-top: 4px; }
+    .poses { flex: 1; min-height: 0; }
+    .pose { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .pose-head { flex-shrink: 0; margin-bottom: 4px; }
+    .pose-viewport { flex: 1; min-height: 0; }
+    .pose canvas { position: absolute; inset: 0; height: 100%; }
+    .pose-meta { flex-shrink: 0; margin-top: 4px; }
+  }
   @media (max-width: 680px) { .app { width: min(100% - 24px, 520px); padding-top: 18px; } .masthead { align-items: start; flex-direction: column; }
     #episode { width: min(100%, 340px); } .transport { gap: 10px; padding: 10px; } .surface { padding: 12px; }
     .poses { grid-template-columns: 1fr; } .pose + .pose { border-top: 1px solid var(--line); padding-top: 16px; }
@@ -95,7 +118,7 @@
   <main class="workspace">
     <section class="surface" aria-labelledby="video-title">
       <div class="panel-heading"><h2 id="video-title">Video <span id="camera-name"></span></h2></div>
-      <div id="primaryCamera"></div><div id="otherCameras" class="filmstrip"></div>
+      <div class="video-content"><div id="primaryCamera"></div><div id="otherCameras" class="filmstrip"></div></div>
     </section>
     <section class="surface" aria-labelledby="state-title">
       <div class="panel-heading"><h2 id="state-title">End-effector poses</h2></div>
