@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>导出数据检查</title>
+<title>Exported Data Inspector</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -69,9 +69,6 @@
   .pose-empty { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #aabbd0; font-size: 14px; pointer-events: none; }
   .pose-meta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--muted);
     font-size: 12px; font-variant-numeric: tabular-nums; }
-  .guide { margin: 16px 0 0; color: var(--muted); font-size: 13px; }
-  .guide summary { width: fit-content; cursor: pointer; }
-  .guide p { max-width: 900px; line-height: 1.6; margin: 8px 0 0; }
   #error { color: var(--error); margin: 0 0 12px; white-space: pre-wrap; }
   #error:empty { display: none; }
   @media (max-width: 1050px) { .workspace { grid-template-columns: 1fr; } .poses { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -83,31 +80,28 @@
 </style>
 <div class="app">
   <header class="masthead">
-    <div><p class="eyebrow">Robot Data Hub</p><h1>导出数据检查</h1></div>
+    <div><p class="eyebrow">Robot Data Hub</p><h1>Exported Data Inspector</h1></div>
     <label class="field" for="episode">Episode <select id="episode"></select></label>
   </header>
-  <p class="task"><span>当前指令</span><strong id="instruction" aria-live="polite">正在读取…</strong></p>
+  <p class="task"><span>Current instruction</span><strong id="instruction" aria-live="polite">Loading…</strong></p>
   <div class="transport">
-    <button id="play" type="button" aria-label="播放">▶ 播放</button>
+    <button id="play" type="button" aria-label="Play">▶ Play</button>
     <div class="scrub">
-      <input id="timeline" aria-label="Episode 时间轴" type="range" min="0" max="1000" value="0">
-      <div class="scrub-label"><span>时间轴</span><output id="time">0.000 s</output></div>
+      <input id="timeline" aria-label="Episode timeline" type="range" min="0" max="1000" value="0">
+      <div class="scrub-label"><span>Timeline</span><output id="time">0.000 s</output></div>
     </div>
   </div>
   <p id="error" role="alert"></p>
   <main class="workspace">
     <section class="surface" aria-labelledby="video-title">
-      <div class="panel-heading"><h2 id="video-title">视频 <span id="camera-name"></span></h2></div>
+      <div class="panel-heading"><h2 id="video-title">Video <span id="camera-name"></span></h2></div>
       <div id="primaryCamera"></div><div id="otherCameras" class="filmstrip"></div>
     </section>
     <section class="surface" aria-labelledby="state-title">
-      <div class="panel-heading"><h2 id="state-title">末端位姿</h2></div>
+      <div class="panel-heading"><h2 id="state-title">End-effector poses</h2></div>
       <div class="poses" id="poses"></div>
     </section>
   </main>
-  <details class="guide"><summary>视图说明</summary>
-    <p>彩色短线是当前 TCP 前的运动轨迹，白球中心是当前 TCP；红 X、绿 Y、蓝 Z 是工具轴，白色实体夹指示意夹爪开合。视图使用透视、光照和前后遮挡帮助判断三维朝向，夹指与坐标轴的尺寸仅作示意。拖动位姿视图可旋转，滚轮可缩放。相机和各状态流按同一个 episode 时钟选择最近的已采样值。默认从各臂起始工具的后上方向前看，近似第一人称视角；重置视角会恢复此方向。导出数据没有相机外参，因此它不是经过标定的视频叠加。</p>
-  </details>
 </div>
 <script type="module">
 import {Pose3D} from '/pose3d.js';
@@ -117,8 +111,8 @@ let poseViews = {}, cameraCards = {};
 const seconds = ns => (ns / 1e9).toFixed(3) + ' s';
 function setPlaying(value) {
   playing = value; lastTick = 0;
-  $('play').textContent = playing ? '❚❚ 暂停' : '▶ 播放';
-  $('play').setAttribute('aria-label', playing ? '暂停' : '播放');
+  $('play').textContent = playing ? '❚❚ Pause' : '▶ Play';
+  $('play').setAttribute('aria-label', playing ? 'Pause' : 'Play');
 }
 function sampleIndex(times, target) {
   let lo = 0, hi = times.length;
@@ -128,8 +122,9 @@ function sampleIndex(times, target) {
 function frameUrl(id, camera, index, width) {
   return `/api/frame?id=${encodeURIComponent(id)}&camera=${encodeURIComponent(camera)}&index=${index}&width=${width}`;
 }
-// 通用相机排序：俯视/全局视角优先，腕部/鱼眼靠后。用词根正则匹配，
-// 不依赖某个数据集的具体命名，越像“看全局”的相机越适合当主视图。
+// Generic camera ordering: prefer overhead/global views, push wrist/fisheye back.
+// Root-word regexes avoid depending on any dataset's specific naming, so the
+// cameras that look most global are treated as the best primary view.
 const CAMERA_HINTS = [
   [/top|overhead|bird|global|high/, 100],
   [/head/, 50], [/front/, 20],
@@ -155,7 +150,7 @@ function render() {
   $('time').textContent = seconds(currentNs) + ' / ' + seconds(data.end_ns);
   const active = data.instructions.find(ins => ins.start_ns <= currentNs &&
     (currentNs < ins.end_ns || currentNs === data.end_ns && ins.end_ns === data.end_ns));
-  const instruction = active ? active.text : '此时段无指令';
+  const instruction = active ? active.text : 'No instruction for this time range';
   if ($('instruction').textContent !== instruction) $('instruction').textContent = instruction;
   for (const [camera, stream] of Object.entries(data.cameras)) {
     const index = sampleIndex(stream.times, currentNs);
@@ -170,7 +165,7 @@ function render() {
       img.removeAttribute('src'); img.dataset.request = ''; img.dataset.loading = '';
     }
     document.getElementById('meta-' + camera).textContent = index < 0
-      ? '等待首帧' : `采样于 ${seconds(stream.times[index])}`;
+      ? 'Waiting for first frame' : `Sampled at ${seconds(stream.times[index])}`;
   }
   for (const side of ['left', 'right']) {
     const pose = data.streams[side + '_eef'], gripper = data.streams[side + '_gripper'];
@@ -179,9 +174,9 @@ function render() {
     const openness = gripperIndex < 0 ? null : gripper.values[gripperIndex];
     poseViews[side].setSample(poseIndex, openness);
     document.getElementById('meta-' + side).textContent = poseIndex < 0
-      ? '等待首个 TCP 样本' : `采样于 ${seconds(pose.times[poseIndex])}`;
+      ? 'Waiting for first TCP sample' : `Sampled at ${seconds(pose.times[poseIndex])}`;
     document.getElementById('gripper-' + side).textContent = openness === null
-      ? '夹爪：等待首样本' : `夹爪开合 ${Math.round(openness * 100)}%`;
+      ? 'Gripper: waiting for first sample' : `Gripper opening ${Math.round(openness * 100)}%`;
   }
 }
 function setup(episode) {
@@ -192,8 +187,8 @@ function setup(episode) {
   const cameras = orderedCameras(Object.keys(data.cameras));
   for (const camera of cameras) {
     const card = document.createElement('button'); card.type = 'button'; card.className = 'camera';
-    card.setAttribute('aria-label', `切换到 ${camera} 相机`);
-    const img = document.createElement('img'); img.id = 'img-' + camera; img.alt = camera + ' 当前帧';
+    card.setAttribute('aria-label', `Switch to ${camera} camera`);
+    const img = document.createElement('img'); img.id = 'img-' + camera; img.alt = camera + ' current frame';
     img.onload = () => {
       if (!img.isConnected || !img.dataset.request) return;
       img.dataset.loading = ''; render();
@@ -202,7 +197,7 @@ function setup(episode) {
       if (!img.isConnected || !img.dataset.request) return;
       img.dataset.loading = '';
       setPlaying(false);
-      $('error').textContent = `无法解码 ${camera} 的视频帧，请检查 PyAV 和 Pillow。`;
+      $('error').textContent = `Failed to decode the video frame for ${camera}; check PyAV and Pillow.`;
     };
     const title = document.createElement('span'); title.className = 'camera-title'; title.textContent = camera;
     const detail = document.createElement('span'); detail.id = 'meta-' + camera; detail.className = 'detail';
@@ -214,10 +209,10 @@ function setup(episode) {
   for (const side of ['left', 'right']) {
     const card = document.createElement('section'); card.className = 'pose';
     const head = document.createElement('div'); head.className = 'pose-head';
-    const title = document.createElement('h3'); title.textContent = side === 'left' ? '左臂' : '右臂';
-    const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'quiet'; reset.textContent = '重置视角';
+    const title = document.createElement('h3'); title.textContent = side === 'left' ? 'Left arm' : 'Right arm';
+    const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'quiet'; reset.textContent = 'Reset view';
     head.append(title, reset);
-    const canvas = document.createElement('canvas'); canvas.setAttribute('aria-label', title.textContent + ' 3D 位姿');
+    const canvas = document.createElement('canvas'); canvas.setAttribute('aria-label', title.textContent + ' 3D pose');
     const viewport = document.createElement('div'); viewport.className = 'pose-viewport'; viewport.append(canvas);
     const meta = document.createElement('div'); meta.className = 'pose-meta';
     const time = document.createElement('span'); time.id = 'meta-' + side;
@@ -231,7 +226,7 @@ function setup(episode) {
 async function load(id) {
   const token = ++generation;
   $('error').textContent = '';
-  $('instruction').textContent = '正在读取…';
+  $('instruction').textContent = 'Loading…';
   try {
     const res = await fetch('/api/episode?id=' + encodeURIComponent(id));
     if (!res.ok) throw new Error(await res.text());

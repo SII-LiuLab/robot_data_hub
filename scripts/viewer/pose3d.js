@@ -29,7 +29,7 @@ export class Pose3D {
     try {
       this.renderer = new THREE.WebGLRenderer({canvas, antialias: true});
     } catch (error) {
-      throw new Error('无法显示 3D 位姿，请检查浏览器是否支持 WebGL 2 并启用硬件加速。', {cause: error});
+      throw new Error('Unable to display the 3D pose; check that the browser supports WebGL 2 and hardware acceleration is enabled.', {cause: error});
     }
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setClearColor('#0c1520');
@@ -48,7 +48,7 @@ export class Pose3D {
     this.createGeometry();
     this.message = document.createElement('span');
     this.message.className = 'pose-empty';
-    this.message.textContent = '等待首个 TCP 样本';
+    this.message.textContent = 'Waiting for first TCP sample';
     canvas.parentElement.append(this.message);
     this.onDown = event => {
       if (event.button !== 0) return;
