@@ -17,50 +17,19 @@
 
 这四点把“格式定义”与“实现”分开、“各数据源的差异”与“公共逻辑”分开、“转换”与“检查”分开。新增数据源时，只需新增一份源契约和一个转换脚本。
 
-## ABC-130k 数据选取配置
+## 数据集
 
-- 源格式说明：[`docs/sources/abc130k/source.md`](docs/sources/abc130k/source.md)。
-- 转换到统一导出格式：`python scripts/convert/abc130k.py`；EEF 使用 YAM 模型与实测关节角 FK。用法与 TCP 定义见 [`docs/sources/abc130k/conversion.md`](docs/sources/abc130k/conversion.md)。
-- 查看转换结果：`python scripts/viewer/export_viewer.py <导出目录>`，只读取统一导出契约；安装与使用见 [`docs/tools/export-viewer.md`](docs/tools/export-viewer.md)。
-- 数据范围：YAM 双臂真实数据，覆盖 `data/train/` 下全部任务目录（当前 201 个），优先保证任务多样性。
-- 抽样方式：每个任务目录随机选取 30 条完整轨迹，不足 30 条则全部保留；固定随机种子为 `42`。
-- 预计规模：最多 6,030 条轨迹，约占原数据集 130,703 条轨迹的 4.6%（按轨迹数量计算）。
+每个数据集对应一份源契约（原始字段、坐标系、时间戳）和一份转换说明（运行方式与映射规则）：
 
-## AgiBot World 2026 数据选取配置
+| 数据集 | 源数据契约 | 转换说明 |
+|---|---|---|
+| ABC-130k | [`docs/sources/abc130k/source.md`](docs/sources/abc130k/source.md) | [`docs/sources/abc130k/conversion.md`](docs/sources/abc130k/conversion.md) |
+| AgiBot World 2026 | [`docs/sources/agibotworld2026/source.md`](docs/sources/agibotworld2026/source.md) | [`docs/sources/agibotworld2026/conversion.md`](docs/sources/agibotworld2026/conversion.md) |
+| Galaxea Open-World Dataset | [`docs/sources/galaxea/source.md`](docs/sources/galaxea/source.md) | [`docs/sources/galaxea/conversion.md`](docs/sources/galaxea/conversion.md) |
+| HiFi-UMI-2K | [`docs/sources/hifi-umi/source.md`](docs/sources/hifi-umi/source.md) | [`docs/sources/hifi-umi/conversion.md`](docs/sources/hifi-umi/conversion.md) |
+| MolmoAct2-BimanualYAM | [`docs/sources/molmoact2/source.md`](docs/sources/molmoact2/source.md) | [`docs/sources/molmoact2/conversion.md`](docs/sources/molmoact2/conversion.md) |
 
-- 源格式与字段语义：[`docs/sources/agibotworld2026/source.md`](docs/sources/agibotworld2026/source.md)。
-- 转换到统一导出格式：`python scripts/convert/agibotworld2026.py`；用法、G2 TCP 和缺少底盘位姿时的处理见 [`docs/sources/agibotworld2026/conversion.md`](docs/sources/agibotworld2026/conversion.md)。
-- 数据范围：`ImitationLearning/CommercialSpaces`（商业场景），当前 138 条轨迹。
-- 抽样方式：按文件体积取最小的 5 条轨迹（便于快速采样）；也可用 `scripts/download/agibotworld_subset.py select --strategy random --seed 42` 随机抽样。
-- 已下载：5 条轨迹，共约 28 GiB，保存于 `dataset/raw/AgiBotWorld2026/`（LeRobot 格式 tar.gz）。
-
-## Galaxea Open-World Dataset 数据选取配置
-
-- 源格式与两种本体的工具坐标系：[`docs/sources/galaxea/source.md`](docs/sources/galaxea/source.md)。
-- 转换入口：`python scripts/convert/galaxea.py`，只导出全程底盘速度命令为零的轨迹，假定底盘固定；其余直接跳过，不保存逐条原因。用法与筛选规则见 [`docs/sources/galaxea/conversion.md`](docs/sources/galaxea/conversion.md)。
-
-- 数据范围：`lerobot/` 下全部 227 个任务归档，每个归档是一个自包含的 LeRobot v2.1 数据集，内含多条轨迹（episode）。
-- 抽样方式：按归档体积取最小的 5 个任务归档（便于快速采样）；也可用 `scripts/download/galaxea_subset.py select --strategy random --seed 42` 随机抽样。
-- 说明：该数据集以任务归档为最小下载单元，无法单独下载单条轨迹，因此抽样单元是任务而非轨迹；5 个归档共含 244 条轨迹。
-- 已下载：5 个任务归档，共约 5.00 GiB / 244 条轨迹，保存于 `dataset/raw/Galaxea-Open-World-Dataset/`（tar.gz 及 `extract` 解压后的 LeRobot 数据集）。
-
-## HiFi-UMI-2K 数据选取配置
-
-- 源格式与工具坐标系：[`docs/sources/hifi-umi/source.md`](docs/sources/hifi-umi/source.md)。
-- 转换入口：`python scripts/convert/hifi_umi.py`，夹爪按单指 0–35° 归一化；运行方式与校验规则见 [`docs/sources/hifi-umi/conversion.md`](docs/sources/hifi-umi/conversion.md)。
-- 数据范围：全部 398 个 shard（`chunk-XXXX/part-0000`），每个 shard 是一个自包含的 LeRobot v3 数据集，内含约 140 条 episode（轨迹）。
-- 抽样方式：先按体积取最小的 1 个 shard（当前为 `chunk-0397`），再在该 shard 内用固定随机种子 `42` 随机抽取 5 条轨迹；也可用 `scripts/download/hifi_umi_subset.py select --strategy smallest` 取最短的 5 条。
-- 说明：该数据集把同一 shard 内全部 episode 的 6 路相机视频分别拼接成一路一个 MP4，单条轨迹不是独立文件，因此下载时对远端 MP4 发起 HTTP range 请求，按 episode 的 `from/to_timestamp` 精确截取并逐帧重新编码为 H.264（CRF 18，码率与源相当）。源 shard 的 `meta` 及各表保存在 `source/`。
-- 已下载：5 条轨迹（`episode_000013`、`000024`、`000084`、`000091`、`000122`），共 8,395 帧 / 约 0.75 GiB，保存于 `dataset/raw/HiFi-UMI-2K/`；每个 episode 含 6 路相机 MP4、逐帧 `data.parquet` 与 `episode.json`。
-
-## MolmoAct2-BimanualYAM 数据选取配置
-
-- 源格式与 YAM 工具约定：[`docs/sources/molmoact2/source.md`](docs/sources/molmoact2/source.md)。
-- 转换入口：`python scripts/convert/molmoact2.py`，用实测关节 FK 生成 EEF，默认输出 `dataset/processed/MolmoAct2-BimanualYAM/`；用法及源记录时间的限制见 [`docs/sources/molmoact2/conversion.md`](docs/sources/molmoact2/conversion.md)。
-- 数据范围：单个合并后的 LeRobot v3 数据集，机器人 `bi_yam_follower`，30 fps，共 32,246 条轨迹（episode）、76,046,658 帧，覆盖 34 个任务。
-- 抽样方式：用固定随机种子 `42` 在整个数据集上随机抽取 5 条轨迹（`scripts/download/molmoact2_subset.py select --strategy random --seed 42`）；也可用 `--strategy smallest` 取最短的 5 条。
-- 说明：该数据集把同一视频文件内多条 episode 的 3 路相机视频（`top`/`left`/`right`，AV1）分别拼接成一路 MP4，单条轨迹不是独立文件，因此下载时对远端 MP4 发起 HTTP range 请求，按 episode 的 `from/to_timestamp` 精确截取并逐帧重新编码为 H.264（CRF 18，码率与源相当）。episode 的逐帧表从 `data/chunk-*/file-*.parquet` 中按 `episode_index` 过滤得到；`meta/tasks_annotated.parquet` 提供逐 episode 的语言标注。源 `meta` 及各数据表保存在 `source/`。
-- 已下载：5 条轨迹（`episode_006848`、`014787`、`022490`、`030268`、`032144`），共 12,103 帧 / 约 0.62 GiB，保存于 `dataset/raw/MolmoAct2-BimanualYAM/`；每个 episode 含 3 路相机 MP4、逐帧 `data.parquet` 与 `episode.json`。
+下载与选取脚本（每个源数据集一个入口）见 [`scripts/README.md`](scripts/README.md)。
 
 ## 统一机器人模型
 
