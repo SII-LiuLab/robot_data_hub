@@ -239,6 +239,28 @@ def state_jump_intervals(stream, config):
     return events
 
 
+def state_change_times(stream, config):
+    """Advance an anchor whenever a sample leaves its tolerance band.
+
+    A fixed anchor lets slow motion accumulate while bounded noise does not.
+    """
+    visible = np.flatnonzero(np.r_[np.diff(stream.times) > 0, True])
+    changes, start = [], 0
+    while start + 1 < len(visible):
+        reach = 1
+        while True:
+            window = visible[start+1:start+1+reach]
+            moved = np.flatnonzero(stream.changed(window, visible[start], config))
+            if len(moved) or len(window) < reach:
+                break
+            reach *= 2
+        if not len(moved):
+            break
+        start += 1 + int(moved[0])
+        changes.append(stream.times[visible[start]])
+    return np.asarray(changes, dtype=np.int64)
+
+
 def detect_episode(index, streams, end_ns, config=Config()):
     """Return contract records in rule order; timestamps remain native int64 ns."""
     records = []
@@ -255,7 +277,7 @@ def detect_episode(index, streams, end_ns, config=Config()):
         last = np.flatnonzero(stream.changed(slice(None), -1, config))
         starts.append(int(stream.times[first[0]]) if len(first) else end_ns)
         tails.append(end_ns - int(stream.times[last[-1]]) if len(last) else end_ns)
-        changes.append(stream.times[1:][stream.changed(slice(1, None), slice(None, -1), config)])
+        changes.append(state_change_times(stream, config))
     first, last = int(np.argmin(starts)), int(np.argmin(tails))
     if starts[first] / NS_PER_SECOND > config.max_boundary_idle_s:
         add(STATE_NAMES[first], 0, starts[first], 'boundary_idle')

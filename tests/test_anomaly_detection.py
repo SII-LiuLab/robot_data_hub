@@ -196,10 +196,43 @@ class DetectionTests(unittest.TestCase):
         streams['left_gripper'] = stream(np.arange(31), openness=np.arange(31) % 2)
         self.assertEqual(detect(streams, 'internal_idle', end=30), [])
 
-    def test_internal_changes_compare_adjacent_samples_not_boundary(self):
-        streams = still()
-        streams['left_eef'] = stream(np.arange(20), positions=np.arange(20)*.009)
-        self.assertEqual(detect(streams, 'internal_idle'), [])
+    def test_internal_idle_does_not_mistake_smooth_motion_for_a_pause(self):
+        # Large steps bracket smooth motion, so the old adjacent-frame rule
+        # incorrectly reported the entire middle as idle.
+        for hz in (30, 100, 300):
+            times = np.arange(30*hz+1)/hz
+            middle = np.clip(times-1, 0, 28)
+            for name, channel, speed, step in (
+                    ('left_eef', 'positions', .02, .1),
+                    ('right_eef', 'angles', 10., 20.),
+                    ('left_gripper', 'openness', .01, .1),
+                    ('right_gripper', 'openness', .01, .1)):
+                with self.subTest(hz=hz, channel=channel, name=name):
+                    streams = still(30)
+                    values = middle*speed + step*(times >= 1) + step*(times >= 29)
+                    streams[name] = stream(times, **{channel: values})
+                    self.assertEqual(detect(streams, 'internal_idle', end=30), [])
+
+    def test_internal_idle_retains_real_pause_with_subthreshold_noise(self):
+        times = np.arange(901)/30
+        streams = still(30)
+        signal = .1*(times >= 1) + .1*(times >= 20)
+        streams['left_eef'] = stream(times, positions=signal+.001*np.sin(times*4))
+        rows = detect(streams, 'internal_idle', end=30)
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(r['start_ns'] == 1_000_000_000 and r['end_ns'] == 20_000_000_000
+                            for r in rows))
+
+    def test_internal_idle_ignores_hidden_duplicate_samples(self):
+        streams = still(30)
+        times = np.repeat(np.arange(31), 2)
+        positions = .1*(times >= 1) + .1*(times >= 20)
+        positions[::2] += 10  # Viewer only displays the final value at each time.
+        streams['left_eef'] = stream(times, positions=positions)
+        rows = detect(streams, 'internal_idle', end=30)
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(r['start_ns'] == 1_000_000_000 and r['end_ns'] == 20_000_000_000
+                            for r in rows))
 
     def test_config_rejects_invalid_thresholds(self):
         for kwargs in ({'max_boundary_idle_s': -1}, {'position_jump_min_m': float('nan')},
