@@ -1,6 +1,6 @@
 # scripts 目录分类
 
-脚本按“产物类型”分成三类，互不混用，与项目 README 的四条组织原则对应：
+脚本按用途分类，转换与检查分开，与项目 README 的组织原则对应：
 
 ```
 scripts/
@@ -18,12 +18,14 @@ scripts/
 │   ├── molmoact2.py
 │   └── export_common.py
 ├── robot/      # 机器人模型工具（URDF 解析、FK、可视化、包校验）
-    ├── urdf_model.py
-    ├── kinematics.py
-    ├── yam.py
-    ├── fk.py
-    ├── show_models.py
-    └── check_packages.py
+│   ├── urdf_model.py
+│   ├── kinematics.py
+│   ├── yam.py
+│   ├── fk.py
+│   ├── show_models.py
+│   └── check_packages.py
+├── check/      # 仅消费目标格式契约的自动检查工具
+│   └── anomaly_detection.py
 └── viewer/     # 仅消费目标格式契约的本地检查工具
 ```
 
@@ -31,6 +33,7 @@ scripts/
 - `convert/`：把源数据对齐到唯一的目标格式契约（见 [`../docs/contract/export-contract.md`](../docs/contract/export-contract.md)）。`export_common.py` 是跨数据集共用的 Parquet/视频写出逻辑。
 - `robot/`：面向成品 URDF 模型包的工具。`urdf_model.py` 与 `kinematics.py` 是库，`fk.py`、`show_models.py`、`check_packages.py` 是命令行入口；`convert/` 也复用前两者。
 - `viewer/`：读取导出数据契约的本地 viewer，不读取原始数据或机器人模型。用法见 [`../docs/tools/export-viewer.md`](../docs/tools/export-viewer.md)。
+- `check/`：读取导出数据，按异常检测契约生成 JSONL 报告。用法见 [`../docs/tools/anomaly-detection.md`](../docs/tools/anomaly-detection.md)。
 
 ## 运行方式
 

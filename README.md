@@ -31,6 +31,9 @@
 
 下载与选取脚本（每个源数据集一个入口）见 [`scripts/README.md`](scripts/README.md)。
 
+导出后的自动异常检测支持首尾静止、state 突变和中段静止，运行方式见
+[`docs/tools/anomaly-detection.md`](docs/tools/anomaly-detection.md)。
+
 ## 统一机器人模型
 
 ABC-130K / MolmoAct2 对应 YAM，AgiBotWorld2026 对应 G2，Galaxea 按源 `robot_type` 分别对应 R1 Lite 或 R1 Pro。
