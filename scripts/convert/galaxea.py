@@ -49,7 +49,10 @@ def validate_source(info):
         raise ValueError('Expected Galaxea LeRobot v2.1 with robot_type r1lite or r1pro')
     dof = 6 if robot_type == 'r1lite' else 7
     features = info['features']
-    expected = {'observation.state.torso': [4], 'action.chassis.velocities': [6]}
+    expected = {'observation.state.torso': [4]}
+    command_shape = features.get('action.chassis.velocities', {}).get('shape')
+    if command_shape not in ([3], [6]):
+        raise ValueError('Expected 3D planar or 6D twist chassis command dimensions')
     for side in SIDES:
         expected.update({f'observation.state.{side}_arm': [dof],
                          f'observation.state.{side}_ee_pose': [7],
@@ -202,20 +205,25 @@ def source_path(directory, template, index, chunks_size, video_key=None):
     return path
 
 
-def is_stationary(commands, count):
+def is_stationary(commands, count, dimensions=None):
     """Accept zero chassis commands throughout; assume a fixed base for export.
 
     This selection rule does not establish measured physical immobility.
     Invalid commands are skipped; wheel feedback is not part of the selection.
     """
     try:
-        commands = finite_array(commands, (count, 6), 'chassis commands')
-    except ValueError:
+        commands = np.asarray(commands, dtype=float)
+        if dimensions is None:
+            dimensions = commands.shape[1] if commands.ndim == 2 else None
+        if dimensions not in (3, 6):
+            return False
+        commands = finite_array(commands, (count, dimensions), 'chassis commands')
+    except (ValueError, TypeError):
         return False
     return count > 0 and bool(np.all(np.abs(commands) <= 1e-6))
 
 
-def prepare_episode(path, index, metadata, tasks, kinematics):
+def prepare_episode(path, index, metadata, tasks, kinematics, command_dimensions=6):
     rows = pq.read_table(path, columns=COLUMNS).to_pydict()
     count = len(rows['timestamp'])
     if count == 0 or metadata['length'] != count:
@@ -225,7 +233,7 @@ def prepare_episode(path, index, metadata, tasks, kinematics):
     times = [seconds_to_ns(t) for t in rows['timestamp']]
     if times[-1] <= times[0] or any(b < a for a, b in zip(times, times[1:])):
         raise ValueError(f'{path}: unordered or zero-duration timestamps')
-    if not is_stationary(rows['action.chassis.velocities'], count):
+    if not is_stationary(rows['action.chassis.velocities'], count, command_dimensions):
         return None
     dof = 6 if kinematics.robot_type == 'r1lite' else 7
     values = {f'{side}_eef': [] for side in SIDES}
@@ -295,7 +303,8 @@ def convert(source, output, models_dir=ROOT / 'assets/robot_models', *,
                         raise ValueError(f'Duplicate episode ID: {episode_id}')
                     seen.add(episode_id)
                     path = source_path(directory, info['data_path'], index, chunks_size)
-                    prepared = prepare_episode(path, index, episode, tasks, models[kind])
+                    prepared = prepare_episode(path, index, episode, tasks, models[kind],
+                                               info['features']['action.chassis.velocities']['shape'][0])
                     if prepared is None:
                         skipped += 1
                         print(f'Exported {count}; skipped {skipped}', flush=True)

@@ -77,7 +77,7 @@ R1 Lite 轴变换为单位矩阵；R1 Pro 的 `R_native_contract` 各列为规�
 
 ## 底盘记录的边界
 
-`observation.state.chassis` 来自 `/hdas/feedback_chassis.position[0:3]`，表示三轮转向角；`observation.state.chassis.velocities` 是三轮实测线速度。它们不是底盘位置或机体 `[vx,vy,wz]`。`action.chassis.velocities` 为目标 twist，顺序为 `[vx,vy,vz,wx,wy,wz]`，不是实测速度。
+`observation.state.chassis` 来自 `/hdas/feedback_chassis.position[0:3]`，表示三轮转向角；`observation.state.chassis.velocities` 是三轮实测线速度。它们不是底盘位置或机体 `[vx,vy,wz]`。`action.chassis.velocities` 为目标速度命令，不是实测速度。本地旧样本为六维 twist `[vx,vy,vz,wx,wy,wz]`；2026-09-27 检查服务器挂载的 227 个任务，均为三维 `[vx,vy,wz]`，字段 names 对应 linear.x、linear.y、angular.z。转换根据 meta/info.json 的 shape 检查行维度，并要求所有分量为零。服务器版本的 `observation.state.chassis` 还将三轮 position 和 velocity 合并为六维；该反馈字段不参与筛选。
 
 `observation.state.chassis.imu` 包含姿态四元数、角速度和加速度，但不能代替完整底盘平移记录。本地样本发现姿态跳变和待核实的单位，因此本转换不使用它推算底盘运动。
 

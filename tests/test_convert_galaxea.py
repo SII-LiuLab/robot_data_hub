@@ -54,6 +54,24 @@ class GalaxeaMappingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'robot_type'):
             validate_source(info)
 
+    def test_planar_chassis_commands_from_server_release(self):
+        for kind in DEFAULT_TCP_OFFSETS:
+            info = source_info(kind)
+            info['features']['action.chassis.velocities']['shape'] = [3]
+            self.assertEqual(validate_source(info)[0], kind)
+            info['features']['action.chassis.velocities']['shape'] = [4]
+            with self.assertRaisesRegex(ValueError, 'chassis command dimensions'):
+                validate_source(info)
+        self.assertTrue(is_stationary([[0., 0., 0.]] * 3, 3, 3))
+        for component in range(3):
+            commands = [[0.] * 3 for _ in range(3)]
+            commands[1][component] = .01
+            self.assertFalse(is_stationary(commands, 3, 3))
+        for commands in ([[0.] * 6] * 3, [[0.] * 2] * 3,
+                         [[0., 0., math.nan]] * 3, [[0., 0., math.inf]] * 3,
+                         [[0., 0., 0.], [0., 0.], [0., 0., 0.]]):
+            self.assertFalse(is_stationary(commands, 3, 3))
+
     def test_gripper_mm_normalization_and_nonfinite_rejection(self):
         np.testing.assert_allclose(openness([-1, 0, 50, 100, 101], 5), [0, 0, .5, 1, 1])
         np.testing.assert_allclose(openness([[25], [75]], 2), [.25, .75])
