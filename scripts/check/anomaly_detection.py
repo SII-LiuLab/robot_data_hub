@@ -23,9 +23,12 @@ class Config:
     orientation_tolerance_deg: float = 5.
     openness_tolerance: float = .05
     max_boundary_idle_s: float = 3.
-    position_acceleration_limit: float = 100.
-    orientation_acceleration_limit: float = 20000.
-    openness_acceleration_limit: float = 500.
+    position_jump_min_m: float = .02
+    orientation_jump_min_deg: float = 10.
+    openness_jump_min: float = .15
+    jump_max_duration_s: float = .05
+    jump_context_s: float = .1
+    jump_speed_ratio: float = 3.
     max_internal_idle_s: float = 10.
 
     def __post_init__(self):
@@ -33,6 +36,12 @@ class Config:
             value = getattr(self, field.name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f'{field.name} must be finite and nonnegative')
+        if self.jump_max_duration_s < 1e-9:
+            raise ValueError('jump_max_duration_s must be at least 1 ns')
+        if self.jump_context_s < 2 * self.jump_max_duration_s:
+            raise ValueError('jump_context_s must be >= 2 * jump_max_duration_s')
+        if self.jump_speed_ratio <= 1:
+            raise ValueError('jump_speed_ratio must be > 1')
 
 
 def rotation_quaternions(poses):
@@ -42,7 +51,7 @@ def rotation_quaternions(poses):
             and np.allclose(np.sum(b*b, axis=1), 1, atol=1e-6)
             and np.allclose(np.sum(a*b, axis=1), 0, atol=1e-6)):
         raise ValueError('Invalid rotation6D')
-    # Remove floating point drift before calculating angles and SLERP.
+    # Remove floating point drift before calculating rotation distances.
     a /= np.linalg.norm(a, axis=1, keepdims=True)
     b -= np.sum(a*b, axis=1, keepdims=True) * a
     b /= np.linalg.norm(b, axis=1, keepdims=True)
@@ -68,16 +77,6 @@ def rotation_distance_deg(a, b):
     b = np.where(np.sum(a*b, axis=-1, keepdims=True) < 0, -b, b)
     return np.degrees(4 * np.arctan2(np.linalg.norm(a-b, axis=-1),
                                     np.linalg.norm(a+b, axis=-1)))
-
-
-def slerp(a, b, fraction):
-    dot = np.sum(a*b, axis=1, keepdims=True)
-    b = np.where(dot < 0, -b, b)
-    angle = np.arccos(np.clip(np.abs(dot), 0, 1)) / np.pi
-    fraction = fraction[:, None]
-    q = ((1-fraction)*np.sinc((1-fraction)*angle)*a
-         + fraction*np.sinc(fraction*angle)*b) / np.sinc(angle)
-    return q / np.linalg.norm(q, axis=1, keepdims=True)
 
 
 @dataclass
@@ -138,6 +137,108 @@ def read_episode(root, record):
     return streams, end_ns
 
 
+def state_distances(stream, left, right):
+    """Separate physical channels; never mix metres and degrees."""
+    if stream.rotations is None:
+        return np.abs(stream.values[left] - stream.values[right])[..., None]
+    return np.stack((np.linalg.norm(stream.values[left, :3] - stream.values[right, :3], axis=-1),
+                     rotation_distance_deg(stream.rotations[left], stream.rotations[right])), axis=-1)
+
+
+def context_speeds(stream, direction, window_ns, gap_ns):
+    """Robust speed from five time-spaced native anchors on one side.
+
+    Pair-speed medians reduce outlier influence and avoid differentiating
+    consecutive held/quantized samples.
+    """
+    times = stream.times
+    targets = times[:, None] + direction * np.rint(np.linspace(0, window_ns, 5)).astype(np.int64)
+    hi = np.clip(np.searchsorted(times, targets), 0, len(times)-1)
+    lo = np.maximum(hi-1, 0)
+    anchors = np.where(np.abs(times[lo]-targets) < np.abs(times[hi]-targets), lo, hi)
+    # Keep the nearest boundary anchor even if it is slightly outside W.
+    # Clipping to W silently loses a third interval at e.g. 29.9 Hz.
+    first, last = anchors.min(axis=1), anchors.max(axis=1)
+    blocks = np.r_[0, np.cumsum(np.diff(times) > gap_ns)]
+    enough = ((times[last]-times[first] >= .75*window_ns)
+              & (blocks[first] == blocks[last])
+              & (np.sum(np.diff(np.sort(anchors, axis=1), axis=1) > 0, axis=1) >= 2))
+    # Episode edges have no full context; do not interpret them as stationary.
+    enough &= ((times + direction*window_ns >= times[0])
+               & (times + direction*window_ns <= times[-1]))
+    result = np.full((len(times), 1 if stream.rotations is None else 2), np.nan)
+    rows = np.flatnonzero(enough)
+    if not len(rows):
+        return result
+    pairs = []
+    used = set()
+    for i in range(5):
+        for j in range(i+1, 5):
+            left, right = anchors[rows, i], anchors[rows, j]
+            dt = np.abs(times[right]-times[left]) / NS_PER_SECOND
+            speed = np.divide(state_distances(stream, left, right), dt[:, None],
+                              out=np.full((len(rows), result.shape[1]), np.nan),
+                              where=dt[:, None] > 0)
+            # Repeated anchors at low sample rates must not reweight a pair.
+            duplicate = np.zeros(len(rows), dtype=bool)
+            for old_i, old_j in used:
+                duplicate |= ((left == anchors[rows, old_i]) & (right == anchors[rows, old_j]))
+            speed[duplicate] = np.nan
+            pairs.append(speed)
+            used.add((i, j))
+    result[rows] = np.nanmedian(np.stack(pairs), axis=0)
+    return result
+
+
+def state_jump_intervals(stream, config):
+    """Find visible, locally abrupt transitions and merge each short event."""
+    # Match the viewer: at a repeated timestamp the final sample is visible.
+    keep = np.r_[np.diff(stream.times) > 0, True]
+    stream = StateStream(stream.times[keep], stream.values[keep],
+                         None if stream.rotations is None else stream.rotations[keep])
+    times = stream.times
+    if len(times) < 3:
+        return []
+    horizon = round(config.jump_max_duration_s * NS_PER_SECOND)
+    window = round(config.jump_context_s * NS_PER_SECOND)
+    before = context_speeds(stream, -1, window, horizon)
+    after = context_speeds(stream, 1, window, horizon)
+    minimum = np.array([config.openness_jump_min] if stream.rotations is None else
+                       [config.position_jump_min_m, config.orientation_jump_min_deg])
+    blocks = np.r_[0, np.cumsum(np.diff(times) > horizon)]
+    widths = np.searchsorted(times, times + horizon, side='right') - np.arange(len(times)) - 1
+    # For each endpoint, retain the shortest qualifying transition only.
+    starts = np.full(len(times), -1, dtype=np.int64)
+    for offset in range(1, int(widths.max())+1):
+        left = np.flatnonzero(widths >= offset)
+        right = left + offset
+        valid = ((starts[right] < 0) & (blocks[left] == blocks[right])
+                 & np.isfinite(before[left]).all(axis=1) & np.isfinite(after[right]).all(axis=1))
+        left, right = left[valid], right[valid]
+        if not len(left):
+            continue
+        dt = (times[right]-times[left]) / NS_PER_SECOND
+        distance = state_distances(stream, left, right)
+        expected = np.maximum(before[left], after[right]) * dt[:, None]
+        flagged = np.any((distance-expected > minimum)
+                         & (distance > config.jump_speed_ratio*expected), axis=1)
+        starts[right[flagged]] = left[flagged]
+    events = []
+    previous_start = -1
+    for right in np.flatnonzero(starts >= 0):
+        left = int(starts[right])
+        # Discard wider intervals that contain an already detected transition.
+        if left <= previous_start:
+            continue
+        previous_start = left
+        start, end = int(times[left+1]), int(times[right+1])
+        if events and start - events[-1][1] <= horizon:
+            events[-1] = (events[-1][0], max(events[-1][1], end))
+        else:
+            events.append((start, end))
+    return events
+
+
 def detect_episode(index, streams, end_ns, config=Config()):
     """Return contract records in rule order; timestamps remain native int64 ns."""
     records = []
@@ -162,27 +263,8 @@ def detect_episode(index, streams, end_ns, config=Config()):
         add(STATE_NAMES[last], end_ns - tails[last], end_ns, 'boundary_idle')
 
     for name in STATE_NAMES:
-        stream = streams[name]
-        dt = np.diff(stream.times) / NS_PER_SECOND
-        valid = (dt[:-1] > 0) & (dt[1:] > 0)
-        middle = np.flatnonzero(valid) + 1
-        prev, next_ = dt[:-1][valid], dt[1:][valid]
-        fraction = prev / (prev + next_)
-        factor = 2 / (prev * next_)
-        values = stream.values
-        if stream.rotations is None:
-            predicted = (1-fraction)*values[middle-1] + fraction*values[middle+1]
-            flagged = np.abs(values[middle]-predicted)*factor > config.openness_acceleration_limit
-        else:
-            predicted = ((1-fraction[:, None])*values[middle-1, :3]
-                         + fraction[:, None]*values[middle+1, :3])
-            acceleration = np.linalg.norm(values[middle, :3]-predicted, axis=1)*factor
-            predicted_rotation = slerp(stream.rotations[middle-1], stream.rotations[middle+1], fraction)
-            angular_acceleration = rotation_distance_deg(stream.rotations[middle], predicted_rotation)*factor
-            flagged = ((acceleration > config.position_acceleration_limit)
-                       | (angular_acceleration > config.orientation_acceleration_limit))
-        for timestamp in stream.times[middle[flagged]]:
-            add(name, timestamp, timestamp, 'state_jump')
+        for start, end in state_jump_intervals(streams[name], config):
+            add(name, start, end, 'state_jump')
 
     changes = np.unique(np.concatenate(changes))
     for left, right in zip(changes[:-1], changes[1:]):

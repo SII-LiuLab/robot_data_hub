@@ -18,9 +18,16 @@ STATE_NAMES = ('left_eef', 'right_eef', 'left_gripper', 'right_gripper')
 CAMERA_ID = re.compile(r'^[a-z0-9_]+$')
 
 
+def manifest_records(root):
+    # The anomaly contract uses physical line numbers, including blank lines.
+    with (root / 'episodes.jsonl').open(encoding='utf-8') as source:
+        for index, line in enumerate(source):
+            if line.strip():
+                yield index, json.loads(line)
+
+
 def read_dataset(root):
-    records = [json.loads(line) for line in (root / 'episodes.jsonl').read_text(
-        encoding='utf-8').splitlines() if line.strip()]
+    records = [record for _, record in manifest_records(root)]
     if not records:
         raise ValueError('episodes.jsonl is empty')
     episodes = {}
@@ -36,6 +43,37 @@ def read_dataset(root):
             raise ValueError(f'Invalid cameras in episode {episode_id}')
         episodes[episode_id] = record
     return episodes
+
+
+def read_anomalies(root, path):
+    """Resolve the anomaly record contract without importing detection rules."""
+    episode_ids = {index: record['episode_id'] for index, record in manifest_records(root)}
+    records = []
+    with path.open(encoding='utf-8') as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise ValueError('Expected an anomaly object')
+                for field in ('index', 'start_ns', 'end_ns'):
+                    if type(record.get(field)) is not int or record[field] < 0:
+                        raise ValueError(f'{field} must be a nonnegative integer')
+                if record['index'] not in episode_ids:
+                    raise ValueError('index does not address an episode manifest record')
+                if record.get('stream') not in STATE_NAMES:
+                    raise ValueError('Invalid stream')
+                if record['end_ns'] < record['start_ns']:
+                    raise ValueError('end_ns must be >= start_ns')
+                if not isinstance(record.get('reason'), str) or not record['reason'].strip():
+                    raise ValueError('reason must be a nonempty string')
+                records.append({key: record[key] for key in
+                                ('index', 'stream', 'start_ns', 'end_ns', 'reason')})
+                records[-1]['episode_id'] = episode_ids[record['index']]
+            except ValueError as exc:
+                raise ValueError(f'{path}:{line_number}: {exc}') from exc
+    return records
 
 
 def read_episode(root, record):
@@ -153,14 +191,18 @@ class FrameReader:
         return self.last_images[width]
 
 
-def serve(root, host, port):
+def serve(root, host, port, anomalies_path=None):
     episodes = read_dataset(root)
+    if anomalies_path is None and (root / 'anomalies.jsonl').is_file():
+        anomalies_path = root / 'anomalies.jsonl'
+    anomalies = read_anomalies(root, anomalies_path) if anomalies_path is not None else None
     readers = {}
     readers_lock = Lock()
     static_files = {
         '/': ((HERE / 'index.html').read_bytes(), 'text/html; charset=utf-8'),
         **{'/' + name: ((HERE / name).read_bytes(), 'text/javascript; charset=utf-8')
-           for name in ('pose3d.js', 'vendor/three.module.min.js', 'vendor/three.core.min.js')},
+           for name in ('pose3d.js', 'anomalies.js', 'vendor/three.module.min.js',
+                        'vendor/three.core.min.js')},
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -187,10 +229,13 @@ def serve(root, host, port):
                     self.reply(200, body, content_type)
                     return
                 if parsed.path == '/api/dataset':
-                    payload = {'episodes': list(episodes)}
+                    payload = {'episodes': list(episodes), 'anomalies': anomalies}
                 elif parsed.path == '/api/episode':
                     episode_id = query['id'][0]
                     payload = read_episode(root, episodes[episode_id])
+                    if any(record['end_ns'] > payload['end_ns'] for record in (anomalies or [])
+                           if record['episode_id'] == episode_id):
+                        raise ValueError(f'Anomaly interval exceeds episode duration: {episode_id}')
                 elif parsed.path == '/api/frame':
                     episode_id = query['id'][0]
                     camera = query['camera'][0]
@@ -230,11 +275,13 @@ def serve(root, host, port):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('dataset', type=Path, help='Exported dataset root')
+    parser.add_argument('--anomalies', type=Path,
+                        help='Anomaly JSONL report (default: <dataset>/anomalies.jsonl if present)')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
     args = parser.parse_args()
     try:
-        serve(args.dataset.resolve(), args.host, args.port)
+        serve(args.dataset.resolve(), args.host, args.port, args.anomalies)
     except (OSError, ValueError, KeyError) as exc:
         parser.exit(1, f'Error: {exc}\n')
 

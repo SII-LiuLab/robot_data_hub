@@ -72,6 +72,26 @@
     font-size: 12px; font-variant-numeric: tabular-nums; }
   #error { color: var(--error); margin: 0 0 12px; white-space: pre-wrap; }
   #error:empty { display: none; }
+  [hidden] { display: none !important; }
+  .anomaly-review { flex-shrink: 0; margin-bottom: 10px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .anomaly-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .anomaly-controls + .anomaly-controls { margin-top: 6px; }
+  .anomaly-controls select { min-height: 30px; max-width: 210px; padding: 3px 8px; }
+  .anomaly-controls button { min-height: 30px; }
+  #anomaly-record { flex: 1; min-width: 120px; max-width: none; width: 0; }
+  #anomaly-count, #anomaly-detail { color: var(--muted); font-size: 12px; }
+  #anomaly-detail { margin: 6px 0 0; overflow-wrap: anywhere; max-height: 3lh; overflow-y: auto; }
+  #anomaly-marks:empty { display: none; }
+  #anomaly-marks { margin: 4px 4px 0; }
+  .anomaly-lane { position: relative; height: 16px; }
+  .anomaly-lane > span { position: absolute; font-size: 10px; opacity: .7; pointer-events: none; }
+  .anomaly-track { position: absolute; inset: 0; }
+  .anomaly-mark { position: absolute; top: 2px; height: 12px; min-height: 0; min-width: 4px;
+    padding: 0; border: 1px solid var(--error); border-radius: 3px; background: var(--error); opacity: .45; cursor: pointer; }
+  .anomaly-mark.point { transform: translateX(-50%); }
+  .anomaly-mark[aria-pressed="true"] { opacity: 1; outline: 2px solid var(--text); z-index: 1; }
+  .anomalous { color: var(--error); font-weight: 700; }
   @media (min-width: 681px) {
     .app { height: 100dvh; min-height: 600px; display: flex; flex-direction: column; padding: 12px 0; }
     .masthead, .task, .transport { flex-shrink: 0; margin-bottom: 10px; }
@@ -107,10 +127,26 @@
     <label class="field" for="episode">Episode <select id="episode"></select></label>
   </header>
   <p class="task"><span>Current instruction</span><strong id="instruction" aria-live="polite">Loading…</strong></p>
+  <section id="anomaly-review" class="anomaly-review" aria-label="Anomaly review" hidden>
+    <div class="anomaly-controls">
+      <strong>Anomalies</strong>
+      <select id="anomaly-episode" aria-label="Filter anomalies by episode"></select>
+      <select id="anomaly-stream" aria-label="Filter anomalies by stream"></select>
+      <select id="anomaly-reason" aria-label="Filter anomalies by reason"></select>
+      <span id="anomaly-count" aria-live="polite"></span>
+    </div>
+    <div class="anomaly-controls">
+      <button id="anomaly-prev" type="button">← Previous</button>
+      <select id="anomaly-record" aria-label="Anomaly record"></select>
+      <button id="anomaly-next" type="button">Next →</button>
+    </div>
+    <p id="anomaly-detail" aria-live="polite"></p>
+  </section>
   <div class="transport">
     <button id="play" type="button" aria-label="Play">▶ Play</button>
     <div class="scrub">
       <input id="timeline" aria-label="Episode timeline" type="range" min="0" max="1000" value="0">
+      <div id="anomaly-marks" aria-label="Anomalies on the episode timeline"></div>
       <div class="scrub-label"><span>Timeline</span><output id="time">0.000 s</output></div>
     </div>
   </div>
@@ -128,10 +164,17 @@
 </div>
 <script type="module">
 import {Pose3D} from '/pose3d.js';
+import {AnomalyReview} from '/anomalies.js';
 const $ = id => document.getElementById(id);
 let data = null, currentNs = 0, playing = false, lastTick = 0, generation = 0;
 let poseViews = {}, cameraCards = {};
 const seconds = ns => (ns / 1e9).toFixed(3) + ' s';
+const review = new AnomalyReview($('anomaly-review'), $('anomaly-marks'), record => {
+  setPlaying(false);
+  $('episode').value = record.episode_id;
+  if (data?.episode_id === record.episode_id) { currentNs = record.start_ns; render(); }
+  else load(record.episode_id, record.start_ns);
+});
 function setPlaying(value) {
   playing = value; lastTick = 0;
   $('play').textContent = playing ? '❚❚ Pause' : '▶ Play';
@@ -190,6 +233,7 @@ function render() {
     document.getElementById('meta-' + camera).textContent = index < 0
       ? 'Waiting for first frame' : `Sampled at ${seconds(stream.times[index])}`;
   }
+  const activeStreams = review.activeStreams(currentNs);
   for (const side of ['left', 'right']) {
     const pose = data.streams[side + '_eef'], gripper = data.streams[side + '_gripper'];
     const poseIndex = sampleIndex(pose.times, currentNs);
@@ -200,12 +244,15 @@ function render() {
       ? 'Waiting for first TCP sample' : `Sampled at ${seconds(pose.times[poseIndex])}`;
     document.getElementById('gripper-' + side).textContent = openness === null
       ? 'Gripper: waiting for first sample' : `Gripper opening ${Math.round(openness * 100)}%`;
+    document.getElementById('meta-' + side).classList.toggle('anomalous', activeStreams.has(side + '_eef'));
+    document.getElementById('gripper-' + side).classList.toggle('anomalous', activeStreams.has(side + '_gripper'));
   }
 }
-function setup(episode) {
+function setup(episode, startNs = 0) {
   Object.values(poseViews).forEach(view => view.destroy());
   poseViews = {}; cameraCards = {};
-  data = episode; currentNs = 0; setPlaying(false);
+  data = episode; currentNs = startNs; setPlaying(false);
+  review.setEpisode(episode);
   $('primaryCamera').replaceChildren(); $('otherCameras').replaceChildren(); $('poses').replaceChildren();
   const cameras = orderedCameras(Object.keys(data.cameras));
   for (const camera of cameras) {
@@ -246,15 +293,21 @@ function setup(episode) {
   }
   render();
 }
-async function load(id) {
+async function load(id, startNs = 0) {
   const token = ++generation;
+  setPlaying(false);
+  data = null;
+  $('play').disabled = true; $('timeline').disabled = true;
   $('error').textContent = '';
   $('instruction').textContent = 'Loading…';
   try {
     const res = await fetch('/api/episode?id=' + encodeURIComponent(id));
     if (!res.ok) throw new Error(await res.text());
     const episode = await res.json();
-    if (token === generation) setup(episode);
+    if (token === generation) {
+      setup(episode, startNs);
+      $('play').disabled = false; $('timeline').disabled = false;
+    }
   } catch (error) { if (token === generation) $('error').textContent = String(error); }
 }
 function tick(now) {
@@ -285,6 +338,7 @@ fetch('/api/dataset').then(async res => {
     const option = document.createElement('option'); option.value = id; option.textContent = id;
     $('episode').append(option);
   });
+  review.setReport(dataset.anomalies ?? null);
   load(dataset.episodes[0]);
 }).catch(error => { $('error').textContent = String(error); });
 requestAnimationFrame(tick);

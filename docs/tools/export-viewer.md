@@ -9,6 +9,33 @@ python scripts/viewer/export_viewer.py path/to/exported-dataset
 
 打开终端给出的 `http://127.0.0.1:8765/`。可用 `--host`、`--port` 指定监听地址和端口。
 
+## 异常记录浏览
+
+若导出目录下存在 `anomalies.jsonl`，viewer 自动加载；也可指定报告：
+
+```bash
+python scripts/viewer/export_viewer.py path/to/exported-dataset --anomalies /tmp/report.jsonl
+```
+
+异常界面仅依赖[异常记录格式](../contract/anomaly_detection.md#异常记录格式)的五个字段
+`index / stream / start_ns / end_ns / reason`，不依赖检测实现、阈值或具体异常类型。
+`reason` 原样显示，筛选项从报告动态生成；任何符合格式的新原因都无需修改 viewer。
+`index` 按 `episodes.jsonl` 的物理行号（从 0 开始，空行计数）关联导出数据。
+报告本身只含定位信息，相机和 state 仍从对应导出目录读取。
+
+可按 episode、stream、reason 组合筛选，用记录下拉框或 Previous / Next 按报告顺序浏览。
+选择记录会暂停播放，切换到对应 episode，并精确跳到 `start_ns`；此后可拖动或播放查看上下文。
+当前 episode 的筛选结果按流标在共享时间轴下方，点击标记也可跳转。
+区间采用 `[start_ns, end_ns)`，起止相等时显示为单点；详情同时显示原始纳秒值。
+当前时间命中的流会在 state 信息中高亮，包括未被筛选显示的记录。
+报告顺序和重复记录均保留，不推断原因含义或合并记录。
+
+未提供报告且默认文件不存在时隐藏异常界面；空报告显示无异常。
+显式指定的文件不存在或记录格式无效时启动报错；区间超过 episode 终点时在加载该 episode 时报错。
+报告在启动时读取，更新后需重启 viewer。
+
+## 数据播放
+
 页面可选择 episode、拖动共享时间轴或以 1× 速度播放。当前指令显示在页面顶部，随时间轴更新。每路 state 和相机独立按自身的 `timestamp_ns` 取当前时间之前最近的样本；时间点早于首样本时留空，不做插值。相机按索引的 `frame_index` 解码 MP4 显示顺序中的帧，MP4 容器时间不参与采集时间计算。主画面按相机名的词根评分排序选取：俯视/全局视角（如 `top`、`top_head`、`overhead`）优先，头部/前视次之，腕部与鱼眼（如 `hand_left`、`*_wrist`、`*_fisheye`）靠后，缩略图也按此顺序排列；点击其他相机的缩略图即可切换。页面上方显示相机画面，下方并排显示左右臂的 3D TCP 当前位姿及短拖尾（窄屏时上下排列），固定保留之前 2 秒的原生样本。桌面布局按窗口剩余高度分配视频区和 state 区，让两者同屏可见；相机缩略图位于视频区右侧，数量较多时可独立滚动。拖尾颜色从淡到亮指向当前位姿，不绘制更早或未来的轨迹。红 X、绿 Y、蓝 Z 为实体工具轴，白球中心为 TCP，白色实体夹指示意夹爪开合。坐标轴、小球与夹指均使用光照和深度遮挡，配合透视投影帮助分辨前后；这些几何体的尺寸仅作示意，不代表实际机器人外形或夹爪行程。可拖动旋转、滚轮缩放、重置视角。
 
 3D 视图需要浏览器支持 WebGL 2。Three.js 固定版本随 viewer 本地提供，运行时无需访问外部 CDN；版本与许可证见 `scripts/viewer/vendor/README.md`。切换 episode 时释放旧视图的 GPU 资源。

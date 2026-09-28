@@ -71,30 +71,107 @@ class DetectionTests(unittest.TestCase):
         streams['left_gripper'] = stream([0, 1, 19, 20], openness=[0, .1, .2, .3])
         self.assertEqual(detect(streams, 'boundary_idle', config=config), [])
 
-    def test_jump_nonuniform_timing_and_thresholds(self):
-        streams = still(1)
-        # Residual .01 m; dt .01 and .02 s => exactly 100 m/s².
-        streams['left_eef'] = stream([0, .01, .03], positions=[0, .01, 0])
-        self.assertEqual(detect(streams, 'state_jump'), [])
-        rows = detect(streams, 'state_jump', config=replace(script.Config(), position_acceleration_limit=99))
-        self.assertEqual([(r['stream'], r['start_ns'], r['end_ns']) for r in rows],
-                         [('left_eef', 10_000_000, 10_000_000)])
-        streams['right_gripper'] = stream([0, .01, .03], openness=[0, .1, 0])
-        self.assertEqual([r['stream'] for r in detect(streams, 'state_jump')], ['right_gripper'])
+    def test_jump_steps_spikes_and_short_ramps_across_sample_rates(self):
+        for hz in (30, 100, 300):
+            times = np.arange(hz+1)/hz
+            for shape in ('step', 'spike', 'ramp'):
+                with self.subTest(hz=hz, shape=shape):
+                    signal = (times >= .5).astype(float)
+                    if shape == 'spike':
+                        signal = (np.arange(len(times)) == hz//2).astype(float)
+                    if shape == 'ramp':
+                        signal = np.clip((times-.48)/.02, 0, 1)
+                    streams = still(1)
+                    streams['left_eef'] = stream(times, positions=.1*signal)
+                    streams['right_eef'] = stream(times, angles=40*signal)
+                    streams['left_gripper'] = stream(times, openness=.6*signal)
+                    rows = detect(streams, 'state_jump')
+                    self.assertEqual([r['stream'] for r in rows],
+                                     ['left_eef', 'right_eef', 'left_gripper'])
+                    for row in rows:
+                        self.assertGreaterEqual(row['start_ns'], 450_000_000)
+                        self.assertLessEqual(row['start_ns'], 510_000_000)
+                        self.assertLessEqual(row['end_ns'], 600_000_000)
 
-    def test_jump_fast_constant_velocity_and_slerp_across_wrap(self):
-        streams = still(1)
-        streams['left_eef'] = stream([0, .01, .03], positions=[0, 10, 30], angles=[170, 180, 200])
-        streams['right_gripper'] = stream([0, .01, .03], openness=[0, .2, .6])
+    def test_jump_constant_fast_motion_wrap_and_normal_start_stop(self):
+        times = np.arange(301)/300
+        for position in (10*times, 2*np.clip(times-.3, 0, .4), .5*np.sin(2*np.pi*times)):
+            with self.subTest(position=position[100]):
+                streams = still(1)
+                streams['left_eef'] = stream(times, positions=position, angles=170+360*times)
+                streams['right_gripper'] = stream(times, openness=np.clip(2*(times-.2), 0, 1))
+                self.assertEqual(detect(streams, 'state_jump'), [])
+
+    def test_jump_context_tolerates_sampling_just_below_30_hz(self):
+        times = np.arange(31)*.034
+        streams = still(2)
+        for shape in ('spike', 'step'):
+            signal = (np.arange(31) == 15) if shape == 'spike' else (np.arange(31) >= 15)
+            streams['left_eef'] = stream(times, positions=.1*signal)
+            with self.subTest(shape=shape):
+                rows = detect(streams, 'state_jump')
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]['start_ns'], 510_000_000)
+
+    def test_jump_small_noise_held_samples_and_irregular_times(self):
+        rng = np.random.default_rng(42)
+        times = np.r_[0, np.cumsum(rng.uniform(.002, .005, 300))]
+        held = np.floor(times/.02)*.02
+        streams = still(2)
+        streams['left_eef'] = stream(times, positions=.2*held+rng.uniform(-.001, .001, len(times)),
+                                     angles=20*held+rng.uniform(-.2, .2, len(times)))
+        streams['left_gripper'] = stream(times, openness=.2+.2*held)
         self.assertEqual(detect(streams, 'state_jump'), [])
-        streams['left_eef'] = stream([0, .01, .03], angles=[170, 175, 200])
+        streams['left_eef'].values[times >= .5, 0] += .1
+        rows = detect(streams, 'state_jump')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['start_ns'], streams['left_eef'].times[np.searchsorted(times, .5)])
+
+    def test_jump_requires_amplitude_and_relative_speed_in_same_channel(self):
+        times = np.arange(301)/300
+        streams = still(1)
+        # Fast continuous translation plus a tiny abrupt rotation is normal.
+        streams['left_eef'] = stream(times, positions=10*times, angles=(times >= .5)*2)
+        self.assertEqual(detect(streams, 'state_jump'), [])
+        streams['left_eef'] = stream(times, positions=(times >= .5)*.02)
+        self.assertEqual(detect(streams, 'state_jump'), [])
+        config = replace(script.Config(), position_jump_min_m=.019)
+        self.assertEqual(len(detect(streams, 'state_jump', config=config)), 1)
+
+    def test_jump_duplicate_times_match_last_visible_sample(self):
+        times = np.arange(301)/300
+        duplicate = np.repeat(times, 2)
+        positions = np.zeros(len(duplicate))
+        positions[300] = 10  # Hidden by the last sample at the same timestamp.
+        streams = still(1)
+        streams['left_eef'] = stream(duplicate, positions=positions)
+        self.assertEqual(detect(streams, 'state_jump'), [])
+        positions[301] = .1
+        streams['left_eef'] = stream(duplicate, positions=positions)
         self.assertEqual(len(detect(streams, 'state_jump')), 1)
 
-    def test_jump_duplicate_timestamps_and_short_streams(self):
+    def test_jump_missing_context_and_recording_gaps_are_not_jumps(self):
         streams = still(1)
-        streams['left_eef'] = stream([0, .01, .01, .02], positions=[0, 10, 20, 0])
+        streams['left_eef'] = stream([0, .01, .02], positions=[0, 10, 0])
         streams['right_eef'] = stream([0])
         self.assertEqual(detect(streams, 'state_jump'), [])
+        times = np.r_[np.arange(101)/300, .7+np.arange(91)/300]
+        streams['left_eef'] = stream(times, positions=(times >= .7)*10)
+        self.assertEqual(detect(streams, 'state_jump'), [])
+        times = np.arange(301)/300
+        for jump_time in (.01, .99):
+            streams['left_eef'] = stream(times, positions=(times >= jump_time)*.1)
+            self.assertEqual(detect(streams, 'state_jump'), [])
+
+    def test_jump_merges_channels_and_spike_edges_but_separates_events(self):
+        times = np.arange(601)/300
+        signal = ((times >= .5) & (times < .52) | (times >= 1.5)).astype(float)
+        streams = still(2)
+        streams['left_eef'] = stream(times, positions=.1*signal, angles=40*signal)
+        rows = detect(streams, 'state_jump')
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([r['start_ns'] for r in rows], [500_000_000, 1_500_000_000])
+        self.assertGreater(rows[0]['end_ns'], 520_000_000)
 
     def test_rotations_near_half_turn_on_each_axis(self):
         poses = []
@@ -125,8 +202,9 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(detect(streams, 'internal_idle'), [])
 
     def test_config_rejects_invalid_thresholds(self):
-        for kwargs in ({'max_boundary_idle_s': -1}, {'position_acceleration_limit': float('nan')},
-                       {'openness_tolerance': float('inf')}):
+        for kwargs in ({'max_boundary_idle_s': -1}, {'position_jump_min_m': float('nan')},
+                       {'openness_tolerance': float('inf')}, {'jump_max_duration_s': 0},
+                       {'jump_context_s': .01}, {'jump_speed_ratio': 1}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 script.Config(**kwargs)
 

@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from scripts.viewer.export_viewer import FrameReader, read_dataset, read_episode, serve
+from scripts.viewer.export_viewer import FrameReader, read_anomalies, read_dataset, read_episode, serve
 
 
 def exported_dataset(tmp_path):
@@ -39,6 +39,94 @@ class ExportViewerTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root, self.record = exported_dataset(Path(self.temporary.name))
+
+    def report(self, records):
+        path = self.root / 'anomalies.jsonl'
+        path.write_text(''.join(json.dumps(record) + '\n' for record in records), encoding='utf-8')
+        return path
+
+    def request(self, path, report=None):
+        results = []
+
+        class FakeServer:
+            server_port = 8765
+
+            def __init__(self, address, handler):
+                self.handler = handler
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                pass
+
+            def serve_forever(self):
+                handler = self.handler.__new__(self.handler)
+                handler.path = path
+                handler.reply = lambda *args: results.append(args)
+                handler.do_GET()
+
+        with patch('scripts.viewer.export_viewer.ThreadingHTTPServer', FakeServer):
+            serve(self.root, '127.0.0.1', 8765, report)
+        return results[0]
+
+    def test_anomalies_resolve_physical_lines_and_preserve_unknown_reasons(self):
+        manifest = self.root / 'episodes.jsonl'
+        other = {**self.record, 'episode_id': 'other'}
+        manifest.write_text('\n' + json.dumps(self.record) + '\n\n' + json.dumps(other) + '\n')
+        records = [
+            {'index': 3, 'stream': 'left_eef', 'start_ns': 10, 'end_ns': 20,
+             'reason': 'arbitrary_future_rule'},
+            {'index': 1, 'stream': 'right_gripper', 'start_ns': 30, 'end_ns': 30,
+             'reason': '<uninterpreted reason>'},
+        ]
+        path = self.report(records + records[:1])
+        result = read_anomalies(self.root, path)
+        self.assertEqual(result, [dict(records[0], episode_id='other'),
+                                  dict(records[1], episode_id='sample'),
+                                  dict(records[0], episode_id='other')])
+        self.report([{**records[0], 'index': 2}])
+        with self.assertRaisesRegex(ValueError, 'manifest record'):
+            read_anomalies(self.root, path)
+
+    def test_invalid_anomaly_records_report_source_line(self):
+        valid = {'index': 0, 'stream': 'left_eef', 'start_ns': 10, 'end_ns': 20,
+                 'reason': 'custom'}
+        for change in ({'index': True}, {'index': 1}, {'stream': 'camera'},
+                       {'start_ns': -1}, {'end_ns': 9}, {'end_ns': 20.0},
+                       {'reason': ''}, {'reason': None}):
+            with self.subTest(change=change):
+                path = self.report([valid, {**valid, **change}])
+                with self.assertRaisesRegex(ValueError, 'anomalies.jsonl:2:'):
+                    read_anomalies(self.root, path)
+        for malformed in ('[]', '{', '{}'):
+            path.write_text(malformed)
+            with self.assertRaisesRegex(ValueError, 'anomalies.jsonl:1:'):
+                read_anomalies(self.root, path)
+
+    def test_optional_empty_and_explicit_reports(self):
+        status, body, _ = self.request('/api/dataset')
+        self.assertEqual(status, 200)
+        self.assertIsNone(json.loads(body)['anomalies'])
+        self.report([])
+        self.assertEqual(json.loads(self.request('/api/dataset')[1])['anomalies'], [])
+        record = {'index': 0, 'stream': 'left_eef', 'start_ns': 30, 'end_ns': 30,
+                  'reason': 'another_rule'}
+        report = self.report([record]).rename(self.root / 'custom.jsonl')
+        payload = json.loads(self.request('/api/dataset', report)[1])
+        self.assertEqual(payload['anomalies'], [dict(record, episode_id='sample')])
+        with self.assertRaises(FileNotFoundError):
+            self.request('/api/dataset', self.root / 'missing.jsonl')
+
+    def test_rejects_report_beyond_episode_duration_when_loading_episode(self):
+        record = {'index': 0, 'stream': 'left_eef', 'start_ns': 30, 'end_ns': 30,
+                  'reason': 'custom'}
+        self.report([record])
+        self.assertEqual(self.request('/api/episode?id=sample')[0], 200)
+        self.report([{**record, 'end_ns': 31}])
+        status, body, _ = self.request('/api/episode?id=sample')
+        self.assertEqual(status, 400)
+        self.assertIn(b'exceeds episode duration', body)
 
     def test_reads_only_export_contract(self):
         episodes = read_dataset(self.root)
@@ -174,7 +262,7 @@ class ExportViewerTests(unittest.TestCase):
                 pass
 
             def serve_forever(self):
-                for path in ('/', '/pose3d.js', '/vendor/three.module.min.js',
+                for path in ('/', '/pose3d.js', '/anomalies.js', '/vendor/three.module.min.js',
                              '/vendor/three.core.min.js', '/vendor/../../export_viewer.py'):
                     handler = self.handler.__new__(self.handler)
                     handler.path = path
@@ -185,7 +273,7 @@ class ExportViewerTests(unittest.TestCase):
         with patch('scripts.viewer.export_viewer.ThreadingHTTPServer', FakeServer):
             serve(self.root, '127.0.0.1', 8765)
         self.assertIn(b'type="module"', results['/'][1])
-        for path in ('/pose3d.js', '/vendor/three.module.min.js', '/vendor/three.core.min.js'):
+        for path in ('/pose3d.js', '/anomalies.js', '/vendor/three.module.min.js', '/vendor/three.core.min.js'):
             status, body, content_type = results[path]
             self.assertEqual(status, 200)
             self.assertTrue(body)

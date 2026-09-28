@@ -18,16 +18,18 @@ python -m scripts.check.anomaly_detection dataset/processed/ABC-130K \
 `index` 是 `episodes.jsonl` 的物理行号（从 0 开始；跳过空行但仍计入行号）。
 没有异常时输出空文件。重复运行替换报告；全量检测成功才原子替换，失败保留之前的报告并返回非零退出码。
 输出必须是 `.jsonl`，不能覆盖 `episodes.jsonl` 或写入 `episodes/`。
+生成后可用 [导出数据 viewer](export-viewer.md#异常记录浏览) 筛选异常并跳转到对应时间；
+viewer 只依赖异常记录格式，不依赖这些检测规则。
 
 逐 episode 读取四路 state 和相机 Parquet 索引，不解码视频。各流保留原生时间戳与采样数；
 episode 起点为 0，终点取四路 state 和所有相机索引的最大时间戳，instruction 不参与确定终点。
-无效数值、空流、负时间戳、时间倒退或无效 rotation6D 会报错；重复时间戳合法，突变规则跳过相邻时间差为 0 的样本。
+无效数值、空流、负时间戳、时间倒退或无效 rotation6D 会报错；重复时间戳合法，突变规则只保留同一时间戳的最后一个值，与 viewer 一致。
 本工具不替代导出格式完整性校验，例如不会校验 MP4 内容。
 
 记录按 episode 行号、规则顺序（首尾静止、突变、中段静止）输出，同一规则按流与时间顺序输出，
 中段静止按区间再按流输出。流顺序固定为 `left_eef`、`right_eef`、`left_gripper`、`right_gripper`；
 首尾静止若多路并列，取此顺序中的第一路。整段静止且超时仍按契约输出两条首尾记录。
-不同规则的记录不去重；位置与朝向同时突变的同一个样本只输出一条 `state_jump`。
+不同规则的记录不去重；同一路突变按事件合并，位置与朝向共同触发只输出一条 `state_jump`。
 
 所有阈值都可通过命令行覆盖：
 
@@ -37,12 +39,19 @@ episode 起点为 0，终点取四路 state 和所有相机索引的最大时间
 | `--orientation-tolerance-deg` | 5 | 度，首尾与中段静止共用 |
 | `--openness-tolerance` | 0.05 | 开合量，首尾与中段静止共用 |
 | `--max-boundary-idle-s` | 3 | 秒 |
-| `--position-acceleration-limit` | 100 | m/s² |
-| `--orientation-acceleration-limit` | 20000 | °/s² |
-| `--openness-acceleration-limit` | 500 | 1/s² |
+| `--position-jump-min-m` | 0.02 | 米，超过局部基准的最小额外位置变化 |
+| `--orientation-jump-min-deg` | 10 | 度，超过局部基准的最小额外朝向变化 |
+| `--openness-jump-min` | 0.15 | 超过局部基准的最小额外开合变化 |
+| `--jump-max-duration-s` | 0.05 | 秒，候选变化最大时长；同时作为最大允许采样间隔及事件合并间隔 |
+| `--jump-context-s` | 0.1 | 秒，每侧运动基准窗口 |
+| `--jump-speed-ratio` | 3 | 实际变化量相对基准运动量的最小倍数 |
 | `--max-internal-idle-s` | 10 | 秒 |
 
-所有阈值必须有限且非负；规则采用严格大于，等于阈值不报异常。
+所有参数必须有限且非负；另要求候选最大时长至少 1 ns、上下文窗口不小于其两倍、速度倍数大于 1。
+突变必须在同一分量上同时满足额外变化幅度和局部速度倍数门槛，具体定义与覆盖边界见[规则 2](../contract/anomaly_detection.md#规则-2state-明显突变state_jump)。
+原来的 `--*-acceleration-limit` 和 `--*-jump-min-residual*` 参数已移除，不能直接换算为新参数；传入旧参数会报错。
+调整规则或阈值后需重新运行检测以更新报告；已运行的 viewer 在启动时加载报告，需要重启。
+默认值是待人工校准的初始值，没有突变记录不代表所有样本都已验证正常。
 无需额外依赖，使用项目已有的 NumPy 与 PyArrow。
 
 测试：
