@@ -54,7 +54,7 @@ def instructions(task, annotations, origin, end):
             for start, stop in zip(points, points[1:] + [end])]
 
 
-def convert_episode(source, destination, fk, video_decoder='cpu', video_encoder='libx264'):
+def convert_episode(source, destination, fk):
     state = {name: ([], []) for name in STATES.values()}
     videos, tasks = {}, []
     (destination / 'rgb').mkdir(parents=True)
@@ -85,8 +85,7 @@ def convert_episode(source, destination, fk, video_decoder='cpu', video_encoder=
         for topic, timestamp, decoded in messages(source / 'episode.mcap', list(CAMERAS)):
             camera = CAMERAS[topic]
             if camera not in videos:
-                videos[camera] = VideoWriter(destination / 'rgb' / f'{camera}.mp4', decoded.format,
-                                             decoder_backend=video_decoder, encoder_backend=video_encoder)
+                videos[camera] = VideoWriter(destination / 'rgb' / f'{camera}.mp4', decoded.format)
                 stack.callback(videos[camera].close)
             videos[camera].add(decoded.data, timestamp, decoded.format)
         if not videos:
@@ -109,9 +108,7 @@ def convert_episode(source, destination, fk, video_decoder='cpu', video_encoder=
             'instructions': instructions(tasks[0], annotations, origin, end)}
 
 
-def convert(source, output, model_dir, limit=None, video_decoder='cpu', video_encoder='libx264'):
-    if video_encoder == 'nvenc' and video_decoder != 'nvdec':
-        raise ValueError('NVENC requires --video-decoder nvdec')
+def convert(source, output, model_dir, limit=None):
     if output.exists():
         raise ValueError(f'Output already exists; choose a new directory: {output}')
     files = sorted(source.rglob('episode.mcap'))
@@ -132,8 +129,7 @@ def convert(source, output, model_dir, limit=None, video_decoder='cpu', video_en
         with (staged / 'episodes.jsonl').open('w', encoding='utf-8') as metadata:
             for index, path in enumerate(files, 1):
                 print(f'[{index}/{len(files)}] {path.parent.name}', flush=True)
-                record = convert_episode(path.parent, staged / 'episodes' / path.parent.name, fk,
-                                         video_decoder=video_decoder, video_encoder=video_encoder)
+                record = convert_episode(path.parent, staged / 'episodes' / path.parent.name, fk)
                 metadata.write(json.dumps(record, ensure_ascii=False) + '\n')
         if output.exists():
             raise ValueError(f'Output appeared during conversion: {output}')
@@ -147,16 +143,11 @@ def main():
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'dataset/export/ABC-130K')
     parser.add_argument('--model-dir', type=Path, default=ROOT / 'assets/robot_models/yam')
     parser.add_argument('--limit', type=int, help='convert only the first N sorted episodes')
-    parser.add_argument('--video-decoder', choices=('cpu', 'nvdec'), default='nvdec',
-                        help='NVDEC requires an accessible NVIDIA GPU; no software fallback')
-    parser.add_argument('--video-encoder', choices=('libx264', 'nvenc'), default='nvenc',
-                        help='NVENC keeps decoded frames on the GPU; requires NVDEC')
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
         parser.error('--limit must be positive')
     try:
-        convert(args.input_dir, args.output_dir, args.model_dir, args.limit,
-                args.video_decoder, args.video_encoder)
+        convert(args.input_dir, args.output_dir, args.model_dir, args.limit)
     except (ValueError, OSError) as exc:
         parser.exit(1, f'Error: {exc}\n')
 

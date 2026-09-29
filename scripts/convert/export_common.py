@@ -84,23 +84,12 @@ def write_video_index(path, timestamps, origin):
         relative_times(timestamps, origin)], schema=schema), path)
 
 
-def create_video_decoder(codec, backend='cpu', *, keep_on_device=False):
+def create_video_decoder(codec):
     import av
     if codec not in ('h264', 'h265'):
         raise ValueError(f'Unsupported source video codec: {codec}')
-    if backend not in ('cpu', 'nvdec'):
-        raise ValueError(f'Unknown video decoder: {backend}')
-    if keep_on_device and backend != 'nvdec':
-        raise ValueError('Device frames require NVDEC')
-    kwargs = {}
-    if backend == 'nvdec':
-        from av.codec.hwaccel import HWAccel
-        kwargs['hwaccel'] = HWAccel('cuda', allow_software_fallback=False,
-                                    is_hw_owned=keep_on_device)
-    decoder = av.CodecContext.create('hevc' if codec == 'h265' else codec, 'r', **kwargs)
+    decoder = av.CodecContext.create('hevc' if codec == 'h265' else codec, 'r')
     decoder.open()
-    if backend == 'nvdec' and not decoder.is_hwaccel:
-        raise RuntimeError('NVDEC requested but hardware decoding is not active')
     return decoder
 
 
@@ -110,19 +99,12 @@ class VideoWriter:
     MP4 uses an arbitrary 30 Hz container clock; actual times live in Parquet.
     Only compressed samples/timestamps are queued, never a whole decoded video.
     """
-    def __init__(self, path: Path, codec: str, *, decoder_backend='cpu', encoder_backend='libx264'):
+    def __init__(self, path: Path, codec: str):
         import av
         if codec not in ('h264', 'h265'):
             raise ValueError(f'Unsupported source video codec: {codec}')
-        if encoder_backend not in ('libx264', 'nvenc'):
-            raise ValueError(f'Unknown video encoder: {encoder_backend}')
-        if encoder_backend == 'nvenc' and decoder_backend != 'nvdec':
-            raise ValueError('NVENC path requires NVDEC for GPU-resident frames')
-        self.encoder_backend = encoder_backend
-        self.device_frames = 0
         self.codec = codec
-        self.decoder = create_video_decoder(codec, decoder_backend,
-                                            keep_on_device=encoder_backend == 'nvenc')
+        self.decoder = create_video_decoder(codec)
         self.output = av.open(str(path), 'w')
         self.stream = None
         self.source_times = []
@@ -141,10 +123,6 @@ class VideoWriter:
             self._frame(frame)
 
     def _frame(self, frame):
-        if self.encoder_backend == 'nvenc':
-            if frame.format.name != 'cuda':
-                raise RuntimeError('NVDEC → NVENC requires CUDA frames; refusing host-frame fallback')
-            self.device_frames += 1
         index = frame.pts
         if index is None or index in self.seen or not 0 <= index < len(self.source_times):
             raise ValueError('Cannot map decoded frame to a unique MCAP sample')
@@ -153,18 +131,10 @@ class VideoWriter:
             raise ValueError('Video display order has decreasing acquisition timestamps')
         self.seen.add(index)
         if self.stream is None:
-            hardware = self.encoder_backend == 'nvenc'
-            self.stream = self.output.add_stream('h264_nvenc' if hardware else 'libx264', rate=30)
+            self.stream = self.output.add_stream('libx264', rate=30)
             self.stream.width, self.stream.height = frame.width, frame.height
-            self.stream.pix_fmt = 'cuda' if hardware else 'yuv420p'
-            if hardware:
-                # PyAV adopts the first CUDA frame's hw_frames_ctx before opening
-                # NVENC. No reformat/download/upload and no separate CUDA device.
-                self.stream.bit_rate = 0
-                self.stream.options = {'preset': 'p4', 'rc': 'vbr', 'cq': '18',
-                                       'bf': '0', 'rc-lookahead': '0', 'delay': '0'}
-            else:
-                self.stream.options = {'crf': '18', 'preset': 'fast'}
+            self.stream.pix_fmt = 'yuv420p'
+            self.stream.options = {'crf': '18', 'preset': 'fast'}
         elif (frame.width, frame.height) != (self.stream.width, self.stream.height):
             raise ValueError('Video resolution changed within episode')
         frame.pts = len(self.timestamps)

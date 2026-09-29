@@ -14,24 +14,10 @@ python scripts/convert/abc130k.py --limit 1 --output-dir dataset/export/ABC-130K
 `--model-dir` 指定 YAM 模型包（默认 `assets/robot_models/yam/`）。
 模型资产的下载方式见项目 README。每条 episode 名称必须唯一。
 
-CLI 默认使用 `--video-decoder nvdec --video-encoder nvenc`，需要可访问的
-NVIDIA GPU、驱动和 PyAV 18.1 以上；初始化失败时直接报错，不静默回退。
-NVDEC 输出保留在显存（CUDA frame），NVENC 直接使用第一帧携带的硬件帧
-上下文；每帧检查 CUDA 格式，不执行主存下载、像素重排或重新上传。
-MCAP 读取、时间戳索引与 MP4 封装仍在 CPU 上执行。
-
-NVENC 输出 H.264，使用 preset p4、VBR、CQ 18、自动目标码率，关闭 B 帧、
-lookahead 和额外输出延迟。CQ 18 与 x264 CRF 18 不是等价质量参数，文件大小
-和图像质量可能不同。保留两条对照通路：
-
-```bash
-# NVDEC 解码后下载到主存，再用 libx264 编码
-python scripts/convert/abc130k.py --video-decoder nvdec --video-encoder libx264
-# 全 CPU
-python scripts/convert/abc130k.py --video-decoder cpu --video-encoder libx264
-```
-
-NVENC 通路要求 NVDEC，不支持静默改为 CPU 解码后上传。
+视频解码与编码全部在 CPU 上执行，需要 PyAV 18.1 以上，不需要 NVIDIA GPU 或
+额外 ffmpeg 命令行程序。逐帧解码源 H.264/H.265，用 libx264 重新编码为无音轨
+H.264 MP4，使用 preset fast、CRF 18，帧率 30。MCAP 读取、时间戳索引与 MP4
+封装同样在 CPU 上执行。
 
 ## 关节 FK 与工具坐标系
 

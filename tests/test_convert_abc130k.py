@@ -1,5 +1,4 @@
 from pathlib import Path
-import os
 import tempfile
 import unittest
 from fractions import Fraction
@@ -20,42 +19,6 @@ MODEL = script.ROOT / 'assets/robot_models/yam'
 
 
 class ExportTests(unittest.TestCase):
-    @unittest.skipUnless(os.environ.get('ABC_TEST_GPU') == '1', 'set ABC_TEST_GPU=1 on an NVIDIA GPU host')
-    def test_gpu_resident_h264_and_h265_transcode(self):
-        import av
-        for codec, encoder in [('h264', 'libx264'), ('h265', 'libx265')]:
-            with self.subTest(codec=codec), tempfile.TemporaryDirectory() as tmp:
-                context = av.CodecContext.create(encoder, 'w')
-                context.width, context.height = 640, 480
-                context.pix_fmt = 'yuv420p'
-                context.time_base = Fraction(1, 30)
-                context.options = {'bf': '0'}
-                if codec == 'h265':
-                    context.options['x265-params'] = 'log-level=error:pools=1'
-                packets = []
-                for i in range(8):
-                    frame = av.VideoFrame.from_ndarray(np.full((480, 640, 3), i*30, dtype=np.uint8), format='rgb24')
-                    frame.pts = i
-                    packets.extend(context.encode(frame))
-                packets.extend(context.encode(None))
-                path = Path(tmp) / 'gpu.mp4'
-                times = [1000+i*i+2*i for i in range(8)]
-                writer = VideoWriter(path, codec, decoder_backend='nvdec', encoder_backend='nvenc')
-                try:
-                    for timestamp, packet in zip(times, packets):
-                        writer.add(bytes(packet), timestamp, codec)
-                    writer.finish()
-                    self.assertEqual(writer.device_frames, 8)
-                    self.assertEqual(writer.timestamps, times)
-                finally:
-                    writer.close()
-                with av.open(str(path)) as video:
-                    self.assertEqual(video.streams.video[0].codec_context.name, 'h264')
-                    frames = list(video.decode(video=0))
-                    self.assertEqual(len(frames), 8)
-                    for i, frame in enumerate(frames):
-                        self.assertAlmostEqual(float(frame.to_ndarray(format='rgb24').mean()), i*30, delta=4)
-
     def test_nonfinite_gripper_fails_before_video_encoding(self):
         for value in (float('nan'), float('inf'), float('-inf')):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
