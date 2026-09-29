@@ -248,6 +248,28 @@ def prepare_episode(path, index, metadata, tasks, kinematics, command_dimensions
     return times, values, instructions
 
 
+def convert_episode(directory, index, metadata, tasks, kinematics, info, destination):
+    _, cameras = validate_source(info)
+    chunks_size = info['chunks_size']
+    path = source_path(directory, info['data_path'], index, chunks_size)
+    prepared = prepare_episode(path, index, metadata, tasks, kinematics,
+                               info['features']['action.chassis.velocities']['shape'][0])
+    if prepared is None:
+        return None
+    times, values, instructions = prepared
+    for name, samples in values.items():
+        write_state(destination / 'state' / f'{name}.parquet', times, samples, times[0],
+                    pose=name.endswith('_eef'))
+    rgb = destination / 'rgb'
+    rgb.mkdir()
+    for key, camera in sorted(cameras.items()):
+        video = source_path(directory, info['video_path'], index, chunks_size, key)
+        transcode_video(video, rgb / f'{camera}.mp4', len(times))
+        write_video_index(rgb / f'{camera}.parquet', times, times[0])
+    return {'episode_id': destination.name, 'cameras': sorted(cameras.values()),
+            'instructions': instructions}
+
+
 def discover_tasks(source):
     if (source / 'meta/info.json').is_file():
         return [source]
@@ -302,26 +324,13 @@ def convert(source, output, models_dir=ROOT / 'assets/robot_models', *,
                     if episode_id in seen:
                         raise ValueError(f'Duplicate episode ID: {episode_id}')
                     seen.add(episode_id)
-                    path = source_path(directory, info['data_path'], index, chunks_size)
-                    prepared = prepare_episode(path, index, episode, tasks, models[kind],
-                                               info['features']['action.chassis.velocities']['shape'][0])
-                    if prepared is None:
+                    record = convert_episode(directory, index, episode, tasks, models[kind], info,
+                                             staged / 'episodes' / episode_id)
+                    if record is None:
                         skipped += 1
                         print(f'Exported {count}; skipped {skipped}', flush=True)
                         continue
-                    times, values, instructions = prepared
-                    destination = staged / 'episodes' / episode_id
-                    for name, samples in values.items():
-                        write_state(destination / 'state' / f'{name}.parquet', times, samples, times[0],
-                                    pose=name.endswith('_eef'))
-                    rgb = destination / 'rgb'
-                    rgb.mkdir()
-                    for key, camera in sorted(cameras.items()):
-                        video = source_path(directory, info['video_path'], index, chunks_size, key)
-                        transcode_video(video, rgb / f'{camera}.mp4', len(times))
-                        write_video_index(rgb / f'{camera}.parquet', times, times[0])
-                    manifest.write(json.dumps({'episode_id': episode_id, 'cameras': sorted(cameras.values()),
-                                               'instructions': instructions}, ensure_ascii=False) + '\n')
+                    manifest.write(json.dumps(record, ensure_ascii=False) + '\n')
                     count += 1
                     print(f'Exported {count}; skipped {skipped}', flush=True)
                     if limit_episodes is not None and count >= limit_episodes:

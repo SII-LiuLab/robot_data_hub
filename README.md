@@ -29,7 +29,7 @@
 | HiFi-UMI-2K | [`docs/sources/hifi-umi/source.md`](docs/sources/hifi-umi/source.md) | [`docs/sources/hifi-umi/conversion.md`](docs/sources/hifi-umi/conversion.md) |
 | MolmoAct2-BimanualYAM | [`docs/sources/molmoact2/source.md`](docs/sources/molmoact2/source.md) | [`docs/sources/molmoact2/conversion.md`](docs/sources/molmoact2/conversion.md) |
 
-下载与选取脚本（每个源数据集一个入口）见 [`scripts/README.md`](scripts/README.md)。
+下载与选取脚本（每个源数据集一个入口）见 [`scripts/README.md`](scripts/README.md)。单机/Slurm 并行转换及自动 resume 见[并行转换说明](docs/tools/parallel-conversion.md)。
 
 ## 统一机器人模型
 

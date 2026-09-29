@@ -16,7 +16,10 @@ scripts/
 │   ├── galaxea.py
 │   ├── hifi_umi.py
 │   ├── molmoact2.py
-│   └── export_common.py
+│   ├── export_common.py
+│   ├── export_validation.py
+│   ├── parallel.py
+│   └── parallel_adapters.py
 ├── robot/      # 机器人模型工具（URDF 解析、FK、可视化、包校验）
     ├── urdf_model.py
     ├── kinematics.py
@@ -28,7 +31,7 @@ scripts/
 ```
 
 - `download/`：只依赖各源数据集自身的契约，产出 `dataset/raw/` 与 `dataset/manifests/`。
-- `convert/`：把源数据对齐到唯一的目标格式契约（见 [`../docs/contract/export-contract.md`](../docs/contract/export-contract.md)）。`export_common.py` 是跨数据集共用的 Parquet/视频写出逻辑。
+- `convert/`：把源数据对齐到唯一的目标格式契约（见 [`../docs/contract/export-contract.md`](../docs/contract/export-contract.md)）。`export_common.py` 是跨数据集共用的 Parquet/视频写出逻辑；`parallel.py` 提供五个数据源的并行与自动 resume 入口，见[并行转换说明](../docs/tools/parallel-conversion.md)。
 - `robot/`：面向成品 URDF 模型包的工具。`urdf_model.py` 与 `kinematics.py` 是库，`fk.py`、`show_models.py`、`check_packages.py` 是命令行入口；`convert/` 也复用前两者。
 - `viewer/`：读取导出数据契约的本地 viewer，不读取原始数据或机器人模型。用法见 [`../docs/tools/export-viewer.md`](../docs/tools/export-viewer.md)。
 

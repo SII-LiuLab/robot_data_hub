@@ -1,12 +1,28 @@
 """Shared writers for the export contract."""
 from fractions import Fraction
 import math
+import os
 from pathlib import Path
 import shutil
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+
+def configure_codec(context):
+    """Parallel workers use synchronous single-thread codecs, including lookahead.
+
+    Multiple ABC camera contexts stay open at once. A budget per codec would
+    multiply that budget by the camera count; parallelism belongs to workers.
+    Standalone converters retain their previous codec defaults.
+    """
+    if os.environ.get('ROBOT_DATA_HUB_SERIAL_CODECS') == '1':
+        context.thread_count = 1
+        context.thread_type = 'SLICE'
+        if context.name == 'libx264':
+            context.options = {**context.options, 'x264-params':
+                               'threads=1:lookahead-threads=1:sync-lookahead=0'}
 
 
 def seconds_to_ns(seconds):
@@ -32,6 +48,7 @@ def copy_h264_video(source, destination, expected_frames):
                 or reader.streams.video[0].codec_context.name != 'h264'
                 or 'mp4' not in reader.format.name.split(',')):
             raise ValueError(f'{source}: expected a video-only H.264 MP4')
+        configure_codec(reader.streams.video[0].codec_context)
         count, size = 0, None
         for frame in reader.decode(video=0):
             current_size = (frame.width, frame.height)
@@ -89,6 +106,7 @@ def create_video_decoder(codec):
     if codec not in ('h264', 'h265'):
         raise ValueError(f'Unsupported source video codec: {codec}')
     decoder = av.CodecContext.create('hevc' if codec == 'h265' else codec, 'r')
+    configure_codec(decoder)
     decoder.open()
     return decoder
 
@@ -135,6 +153,7 @@ class VideoWriter:
             self.stream.width, self.stream.height = frame.width, frame.height
             self.stream.pix_fmt = 'yuv420p'
             self.stream.options = {'crf': '18', 'preset': 'fast'}
+            configure_codec(self.stream.codec_context)
         elif (frame.width, frame.height) != (self.stream.width, self.stream.height):
             raise ValueError('Video resolution changed within episode')
         frame.pts = len(self.timestamps)
@@ -187,6 +206,8 @@ def transcode_video(source, output, expected_frames):
             raise ValueError(f'{source}: expected one video stream')
         stream = writer.add_stream('libx264', rate=30)
         stream.options = {'crf': '18', 'preset': 'fast'}
+        configure_codec(reader.streams.video[0].codec_context)
+        configure_codec(stream.codec_context)
         for frame in reader.decode(video=0):
             if count == 0:
                 stream.width, stream.height = frame.width, frame.height

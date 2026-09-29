@@ -2,11 +2,64 @@
 
 将各数据集的转换脚本（见 [`../sources/`](../sources/)）通过 Slurm 在单机或多机上执行。采用 **固定任务清单 + 静态分配 + episode 独立提交 + 自动 resume**。不引入 `torch.distributed`、动态队列、租约或在线抢占。
 
-本文是待实现方案。现有转换 CLI 尚不支持这里的并行与 resume 协议。
+统一入口是 [`scripts/convert/parallel.py`](../../scripts/convert/parallel.py)。原有各源转换 CLI 保留单次整集转换行为；需要并行和 resume 时使用本入口。
+
+## 运行
+
+在项目根目录激活已安装项目依赖的 Python 环境。单机运行：
+
+```bash
+python -m scripts.convert.parallel run \
+  --dataset abc130k \
+  --input-dir dataset/raw/ABC-130K \
+  --output-dir dataset/export/ABC-130K \
+  --workers 8
+```
+
+中断后执行同一命令，可将 `--workers 8` 改为其他数量。无需额外的 `--resume` 开关。程序会自动准备计划、启动子进程、对账并发布最终输出。
+
+Slurm 调度由调用者控制。Python 提供三个独立阶段，自己不调用 `srun`，也不接收 Slurm 资源参数。按顺序执行以下三步：
+
+**第 1 步：`prepare`，单独运行一次（单进程）。**
+
+```bash
+python -m scripts.convert.parallel prepare \
+  --dataset abc130k \
+  --input-dir dataset/raw/ABC-130K \
+  --output-dir dataset/export/ABC-130K
+```
+
+**第 2 步：`worker`，由 `srun` 一次拉起全部 worker。** 
+
+```bash
+srun python -m scripts.convert.parallel worker \
+  --output-dir dataset/export/ABC-130K
+```
+
+**第 3 步：`finalize`，单独运行一次（单进程）。**
+
+```bash
+python -m scripts.convert.parallel finalize \
+  --output-dir dataset/export/ABC-130K
+```
+
+`prepare` 和 `finalize` 各执行一次，都是直接执行的单进程命令；`worker` 不单独运行，由 `srun` 按 `--ntasks` 拉起，每个 worker 读取 `SLURM_PROCID` 和 `SLURM_NTASKS` 决定分工。三步按顺序执行，前一步失败就不要执行下一步（也可以把三条命令用 `&&` 串起来，让 shell 保证这一点）。
+
+各节点须能访问同一仓库、Python 环境、源数据和输出盘。上次所有 worker 退出后，重新执行这三步即可 resume；可更改 `srun` 的 worker 数。三个阶段都支持对已发布结果重复执行，不重新转换数据。单机 `run --workers N` 只是本地便利入口，不用于 Slurm。
+
+`--dataset` 支持 `abc130k`、`molmoact2`、`hifi_umi`、`galaxea`、`agibotworld2026`。`--model-dir` 默认为仓库中对应的模型；Galaxea 的该参数指向包含两个本体模型包的父目录。
+
+抽样参数在首次准备时固定，resume 不能更改：
+
+- `--limit N`：前 N 个调度任务；AgiBot 为 archive，其余为 episode。
+- `--limit-episodes N`：全局前 N 个候选 episode，包含合法跳过的 episode。它不同于原 Galaxea CLI 的“前 N 个成功导出”语义。
+- `--robot-type` 仅用于 Galaxea；TCP 和夹爪参数见 `python -m scripts.convert.parallel run --help`。
+
+转换失败返回非零退出码，诊断保存在 `<output>.work/errors/`。共享源数据必须保持不变；修复原始数据或修改转换配置/代码后，使用新输出目录。
 
 ## 1. 使用约定
 
-- **重新提交同一个作业脚本即可 resume**，无需手动清理、合并或指定恢复位置。
+- **重新执行 prepare → worker → finalize 即可 resume**，无需手动清理文件或指定恢复位置；单机也可重跑 `run` 命令。
 - 每次运行可以改变节点数、worker 数和 CPU 预算；完成状态按 episode 保存，不与 worker 编号绑定。
 - **同一输出同时只允许一个作业。** 重跑前，上一轮所有 worker 必须已经退出；不接管仍在运行的作业。
 - 源数据保持只读且不变。resume 使用原任务清单、转换版本、模型和转换参数；不兼容的变更须使用新输出目录。
@@ -16,9 +69,9 @@
 
 作业启动时，由单个准备进程生成 `<output>.work/plan.json`，通过临时文件加原子 rename 发布；成功后才启动 workers。resume 读取并校验已有 plan，不重新发现任务或改动顺序。
 
-plan 保存源数据身份、转换版本、模型与转换参数，以及有固定顺序的任务列表。每个任务记录输入位置和预期 episode ID；episode ID 必须在整个计划中唯一，且只能属于一个任务。筛选和数量限制在准备阶段确定，不由每个 worker 各自应用。节点数、worker 数和 CPU 预算不参与计划兼容性判断。
+plan 保存源数据身份、转换版本、模型与转换参数，以及有固定顺序的任务列表。每个任务记录输入位置和预期 episode ID；episode ID 必须在整个计划中唯一，且只能属于一个任务。筛选和数量限制在准备阶段确定，不由每个 worker 各自应用。节点数、worker 数和 CPU 预算不参与计划兼容性判断。实现记录转换代码、模型 JSON/URDF 的内容指纹及依赖版本；对源文件检查大小和修改时间，不全量散列视频。新增源 episode 不自动加入已有计划。
 
-Slurm 每个 task 启动一个 worker，worker 读取：
+Slurm 每个 task 启动一个 worker。分配使用前两项环境变量，CPU 预算由 Slurm 绑定：
 
 - `SLURM_PROCID`：当前 worker 编号。
 - `SLURM_NTASKS`：本轮 worker 总数。
@@ -78,7 +131,7 @@ records 属于工作目录，不进入最终数据集。最终结构遵守[目�
 3. 将含 `outcome: exported` 和完整 manifest record 的恢复记录写入临时文件，关闭后原子 rename 到 `records/<id>.json`。
 4. 将 staging 中的完整 episode 目录原子 rename 到 `dataset/episodes/<id>`。**这一步是成功导出的提交点。** 不覆盖已提交目录。
 
-不再写额外的 done 标记，也不再追加 worker manifest 分片。**有效的 exported record 与正式 episode 目录同时存在，才表示导出已提交。** 记录先于目录发布，保证已提交目录有对应元数据。
+不再写额外的 done 标记，也不再追加 worker manifest 分片。**有效的 exported record 与正式 episode 目录同时存在，且文件清单及大小匹配，才表示导出已提交。** 记录先于目录发布，保证已提交目录有对应元数据。
 
 合法跳过采用 `outcome: skipped` 的 record，并记录原因；原子发布该 record 即完成跳过，不创建 episode 目录。转换异常不能作为合法跳过。
 
@@ -86,7 +139,7 @@ records 属于工作目录，不进入最终数据集。最终结构遵守[目�
 
 ## 5. 自动 resume 与失败处理
 
-准备阶段在确认上一轮 worker 已全部退出后清理遗留 staging 和未发布的临时记录；保留 plan、正式 records 和已提交 episode。每个 episode 按下表恢复：
+在上一轮 worker 已全部退出的前提下，准备阶段清理遗留 staging 和未发布的临时记录；保留 plan、正式 records 和已提交 episode。每个 episode 按下表恢复：
 
 | 状态 | 处理 |
 |---|---|
@@ -102,15 +155,15 @@ records 属于工作目录，不进入最终数据集。最终结构遵守[目�
 
 ## 6. 作业流程与最终发布
 
-作业脚本自动串联三个阶段：
+三个阶段按顺序执行：**prepare 和 finalize 各自单独运行一次，都是直接执行的单进程 Python 命令；worker 不单独运行，而是由调用者用 `srun` 一次拉起 K 个进程。** 三者的调度与顺序都由调用者控制，Python 本身不调用 `srun`：
 
 ```text
-prepare（单进程）
-  → srun workers（K 个进程）
-  → finalize（单进程）
+1. prepare    单独运行一次（单进程，直接执行 Python 命令）
+2. workers    用 srun 一次拉起 K 个进程（每个 Slurm task 一个 worker）
+3. finalize   单独运行一次（单进程，直接执行 Python 命令）
 ```
 
-prepare 失败则不启动 workers；srun 非零退出则作业失败，保留工作目录供下次 resume。srun 正常结束后才执行 finalize，不在 worker 之间设置 barrier。作业在任意阶段被取消后，都可重新提交同一脚本。
+prepare 失败则不启动 workers；srun 非零退出则作业失败，保留工作目录供下次 resume。srun 正常结束后才执行 finalize，不在 worker 之间设置 barrier。任意阶段被取消后，都可重新执行这三步。
 
 finalize 必须：
 
@@ -121,16 +174,16 @@ finalize 必须：
 
 finalize 不移动单独的 episode，也不消费或删除 records，因此中途退出后可以重新执行。最终目录 rename 成功即表示发布完成；即使来不及打印成功信息，下次也能识别已完成结果。
 
-发布后保留 plan 和 records，用于核对重复运行；不自动清理恢复依据。最终输出已存在时，prepare 核对计划、manifest 与目录的一致性，匹配则整次运行直接成功返回，不再启动 workers 或重新创建待发布数据集。
+发布后保留 plan 和 records，用于核对重复运行；不自动清理恢复依据。最终输出已存在时，prepare 核对计划、manifest 与目录的一致性，匹配则成功返回，不重新创建待发布数据集；随后执行的 worker 和 finalize 也直接成功返回。
 
 ## 7. CPU 与内存预算
 
-- 每个 worker 固定编解码线程配置，并设置 `OMP_NUM_THREADS`；不能仅依靠该环境变量限制视频编解码线程。
+- 当前 worker 显式使用单线程编解码器，关闭 x264 异步 lookahead，并将 OpenMP、BLAS、Arrow 线程池限制为 1；吞吐主要通过 worker 数调节。原有单次转换 CLI 的线程默认值不变。
 - `--cpus-per-task` 是整个 worker 的预算。ABC 会同时持有多个相机的编解码上下文，不能给每个上下文都无条件分配全部预算。
 - 初始 worker 数按“节点数 × 每节点可用核数 / 每 worker CPU 预算”选择，并受峰值内存和共享盘吞吐约束。
 - 从单机保守并发开始，观察总吞吐、峰值内存及共享盘负载，再扩到多机。转码型源与解码校验后直接复制视频的源分别压测。
 
-Slurm 可从 `--nodes=2 --ntasks=32 --cpus-per-task=4` 起步，并使用 `srun --cpu-bind=cores`。这只是资源配置示例，实际并发度按节点资源和测量结果确定；resume 不要求沿用这些数值。
+Slurm 可从 `--nodes=2 --ntasks=32 --cpus-per-task=1` 起步，并使用 `srun --cpu-bind=cores`。这只是资源配置示例，实际并发度按节点资源和测量结果确定；resume 不要求沿用这些数值。
 
 ## 8. 验收
 

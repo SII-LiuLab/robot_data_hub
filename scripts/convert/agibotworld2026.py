@@ -202,78 +202,120 @@ def read_episode(member, archive, info, indices, fk, destination):
     return episode_index, times
 
 
-def convert_archive(path, staged, fk, episode_limit=None):
+def archive_index(path):
+    """Read metadata and parquet member names in streaming order, never extract a tar tree."""
     match = ARCHIVE_NAME.fullmatch(path.name)
     if not match or not re.fullmatch(r'task_\d+', path.parent.name):
         raise ValueError(f'Unexpected AgiBot archive path: {path}')
     prefix = f'{path.parent.name}_{match.group(1)}_{match.group(2)}'
-    info = None
-    metadata = {}
-    episodes = {}
-    with tarfile.open(path, 'r|gz') as archive:
-        for member in archive:
-            if member.name == 'data/meta/info.json':
-                info = json.load(archive.extractfile(member))
-            elif member.name == 'data/meta/episodes.jsonl':
-                metadata = {record['episode_index']: record for record in
-                            (json.loads(line) for line in archive.extractfile(member))}
-            elif member.name.startswith('data/videos/'):
-                break
-    if info is None:
-        raise ValueError(f'{path}: missing info.json')
-    indices, cameras = source_fields(info)
+    info, metadata, entries = None, {}, {}
     with tarfile.open(path, 'r|gz') as archive:
         for member in archive:
             if member.name.startswith('data/videos/'):
                 break
-            if PARQUET_NAME.fullmatch(member.name):
-                local = PARQUET_NAME.fullmatch(member.name).group(1)
-                episode_id = f'{prefix}_{local}'
-                index, times = read_episode(member, archive, info, indices, fk,
-                                            staged / 'episodes' / episode_id)
-                if index in episodes:
-                    raise ValueError(f'{path}: duplicate episode index {index}')
-                episodes[index] = (episode_id, times)
-                if episode_limit is not None and len(episodes) >= episode_limit:
-                    break
-    wanted = min(info['total_episodes'], episode_limit) if episode_limit is not None else info['total_episodes']
-    if len(episodes) != wanted or not set(episodes).issubset(metadata):
-        raise ValueError(f'{path}: missing episode data or metadata')
-    _, cameras = source_fields(info)
-    seen = set()
-    expected = {(index, key) for index in episodes for key in cameras}
+            if member.name == 'data/meta/info.json':
+                info = json.load(archive.extractfile(member))
+            elif member.name == 'data/meta/episodes.jsonl':
+                for line in archive.extractfile(member):
+                    record = json.loads(line)
+                    index = record['episode_index']
+                    if type(index) is not int or index < 0 or index in metadata:
+                        raise ValueError(f'{path}: invalid/duplicate metadata episode index')
+                    metadata[index] = record
+            elif (match := PARQUET_NAME.fullmatch(member.name)):
+                local = match.group(1)
+                index = int(local.split('_')[1])
+                if index in entries:
+                    raise ValueError(f'{path}: duplicate parquet episode index')
+                entries[index] = f'{prefix}_{local}'
+    if (info is None or not entries or len(entries) != info['total_episodes']
+            or set(entries) != set(metadata)):
+        raise ValueError(f'{path}: missing or inconsistent episode metadata/data')
+    source_fields(info)
+    return info, metadata, entries
+
+
+def convert_archive(path, staged, fk, episode_limit=None, *, episode_ids=None,
+                    on_episode=None, on_error=None):
+    """Stream one archive, optionally committing successes as each episode finishes.
+
+    The standalone caller keeps all-or-nothing dataset publication. Parallel
+    callers pass only unfinished IDs and persist successful episodes immediately.
+    """
+    staging = staged / 'episodes'
+    staging.mkdir(parents=True, exist_ok=True)
+    info, metadata, entries = archive_index(path)
+    indices, cameras = source_fields(info)
+    pending = set(episode_ids if episode_ids is not None else list(entries.values())[:episode_limit])
+    selected = {index: episode_id for index, episode_id in entries.items() if episode_id in pending}
+    if set(selected.values()) != set(pending):
+        raise ValueError(f'{path}: archive episode identities changed')
+    ready, broken, completed = {}, set(), {}
+
+    def fail(index, exc):
+        if index not in broken:
+            broken.add(index)
+            if on_error is None:
+                raise exc
+            on_error(selected[index], exc)
+
+    # Scan the archive once for state; each successful episode remains independent.
     with tarfile.open(path, 'r|gz') as archive:
         for member in archive:
-            video = VIDEO_NAME.fullmatch(member.name)
-            if not video or video.group(1) not in cameras:
-                continue
-            key, local = video.groups()
-            index = int(local.split('_')[1])
-            if index not in episodes:
-                continue
-            if (index, key) in seen:
-                raise ValueError(f'{path}: duplicate video {member.name}')
-            seen.add((index, key))
-            episode_id, times = episodes[index]
-            rgb = staged / 'episodes' / episode_id / 'rgb'
-            rgb.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(suffix='.mp4', dir=staged, delete=False) as tmp:
-                temporary = Path(tmp.name)
-                shutil.copyfileobj(archive.extractfile(member), tmp)
-            try:
-                transcode_video(temporary, rgb / f'{cameras[key]}.mp4', len(times))
-            finally:
-                temporary.unlink(missing_ok=True)
-            write_video_index(rgb / f'{cameras[key]}.parquet', times, times[0])
-            if seen == expected:
+            if member.name.startswith('data/videos/'):
                 break
-    if seen != expected:
-        raise ValueError(f'{path}: missing {len(expected-seen)} RGB videos')
-    return [
-        {'episode_id': episodes[index][0], 'cameras': sorted(cameras.values()),
-         'instructions': instructions(info, index, metadata[index]['tasks'][0], episodes[index][1])}
-        for index in sorted(episodes)
-    ]
+            match = PARQUET_NAME.fullmatch(member.name)
+            if not match:
+                continue
+            index = int(match.group(1).split('_')[1])
+            if index not in selected:
+                continue
+            destination = staging / selected[index]
+            try:
+                _, times = read_episode(member, archive, info, indices, fk, destination)
+                record = {'episode_id': selected[index], 'cameras': sorted(cameras.values()),
+                          'instructions': instructions(info, index, metadata[index]['tasks'][0], times)}
+                ready[index] = (times, record)
+            except Exception as exc:
+                fail(index, exc)
+    seen = {index: set() for index in ready}
+    committed = set()
+    with tarfile.open(path, 'r|gz') as archive:
+        for member in archive:
+            match = VIDEO_NAME.fullmatch(member.name)
+            if not match or match.group(1) not in cameras:
+                continue
+            key, local = match.groups()
+            index = int(local.split('_')[1])
+            if index not in ready or index in broken or index in committed:
+                continue
+            times, record = ready[index]
+            rgb = staging / selected[index] / 'rgb'
+            try:
+                if key in seen[index]:
+                    raise ValueError(f'{path}: duplicate video {member.name}')
+                rgb.mkdir(exist_ok=True)
+                temporary = staging / 'source.mp4'
+                with temporary.open('wb') as handle:
+                    shutil.copyfileobj(archive.extractfile(member), handle)
+                try:
+                    transcode_video(temporary, rgb / f'{cameras[key]}.mp4', len(times))
+                finally:
+                    temporary.unlink(missing_ok=True)
+                write_video_index(rgb / f'{cameras[key]}.parquet', times, times[0])
+                seen[index].add(key)
+                if seen[index] == set(cameras):
+                    if on_episode is not None:
+                        on_episode(record, staging / selected[index])
+                    completed[index] = record
+                    committed.add(index)
+            except Exception as exc:
+                fail(index, exc)
+            if len(committed | broken) == len(selected):
+                break
+    for index in selected.keys() - committed - broken:
+        fail(index, ValueError(f'{path}: missing state or RGB for {selected[index]}'))
+    return [completed[index] for index in sorted(completed)]
 
 
 def convert(source, output, model_dir, limit=None, limit_episodes=None, tcp_offset=DEFAULT_TCP_OFFSET):
