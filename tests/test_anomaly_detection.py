@@ -87,11 +87,66 @@ class DetectionTests(unittest.TestCase):
                     streams['left_gripper'] = stream(times, openness=.6*signal)
                     rows = detect(streams, 'state_jump')
                     self.assertEqual([r['stream'] for r in rows],
-                                     ['left_eef', 'right_eef', 'left_gripper'])
+                                     ['left_eef', 'right_eef'] +
+                                     (['left_gripper'] if shape != 'ramp' or hz == 30 else []))
                     for row in rows:
                         self.assertGreaterEqual(row['start_ns'], 450_000_000)
                         self.assertLessEqual(row['start_ns'], 510_000_000)
                         self.assertLessEqual(row['end_ns'], 600_000_000)
+
+    def test_gripper_fast_continuous_open_close_is_not_a_jump(self):
+        for hz in (30, 100, 300):
+            times = np.arange(hz+1)/hz
+            # Resolve the fastest transition with at least two intervals.
+            for duration in (max(.04, 2/hz), .08, .15):
+                phase = np.clip((times-.4)/duration, 0, 1)
+                for signal in (phase, (1-np.cos(np.pi*phase))/2):
+                    for name in ('left_gripper', 'right_gripper'):
+                        for values in (signal, 1-signal):
+                            with self.subTest(hz=hz, duration=duration, name=name,
+                                              opening=values[-1] > values[0]):
+                                streams = still(1)
+                                streams[name] = stream(times, openness=values)
+                                self.assertEqual(detect(streams, 'state_jump'), [])
+
+    def test_gripper_observed_velocity_peaks_use_local_motion(self):
+        # Native 30 Hz samples from reported continuous opening events.
+        for peak in ([.427, .535, .748, .857, .905, .957],
+                     [.332, .427, .754, .847, .897, .950],
+                     [.0747, .3264, .638, .7104, .7176, .7186]):
+            for values in (np.array(peak), 1-np.array(peak)):
+                streams = still(1)
+                streams['left_gripper'] = stream(np.arange(31)/30,
+                    openness=np.r_[np.repeat(values[0], 12), values, np.repeat(values[-1], 13)])
+                self.assertEqual(detect(streams, 'state_jump'), [])
+
+    def test_gripper_local_speed_uses_actual_time_and_retains_discontinuities(self):
+        times = np.arange(101)/100
+        # Equal increments with unequal durations: the centre edge is isolated
+        # in velocity even though its displacement matches its neighbours.
+        times[50] = .4901
+        values = np.zeros(101)
+        values[49:] = .2
+        values[50:] = .4
+        values[51:] = .6
+        streams = still(1)
+        streams['right_gripper'] = stream(times, openness=values)
+        rows = detect(streams, 'state_jump')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['start_ns'], 490_100_000)
+
+    def test_gripper_step_and_spike_during_motion_remain_detectable(self):
+        times = np.arange(301)/300
+        for shape in ('step', 'spike'):
+            signal = .1*times + .6*((times >= .5) if shape == 'step' else (times == .5))
+            for name in ('left_gripper', 'right_gripper'):
+                for values in (signal, 1-signal):
+                    with self.subTest(shape=shape, name=name, opening=values[-1] > values[0]):
+                        streams = still(1)
+                        streams[name] = stream(times, openness=values)
+                        rows = detect(streams, 'state_jump')
+                        self.assertEqual(len(rows), 1)
+                        self.assertEqual(rows[0]['start_ns'], 500_000_000)
 
     def test_jump_constant_fast_motion_wrap_and_normal_start_stop(self):
         times = np.arange(301)/300

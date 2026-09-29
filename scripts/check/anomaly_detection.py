@@ -203,13 +203,27 @@ def state_jump_intervals(stream, config):
     window = round(config.jump_context_s * NS_PER_SECOND)
     before = context_speeds(stream, -1, window, horizon)
     after = context_speeds(stream, 1, window, horizon)
+    gripper = stream.rotations is None
+    if gripper:
+        # A fast open/close can have stationary context on both sides. Look
+        # for an isolated native-sample edge, not its accumulated travel.
+        speeds = np.diff(stream.values) / (np.diff(times) / NS_PER_SECOND)
+        neighbor_speed = np.zeros(len(speeds))
+        same_direction = speeds[:-1] * speeds[1:] > 0
+        same_direction &= ((np.diff(times)[:-1] <= horizon)
+                           & (np.diff(times)[1:] <= horizon))
+        # Add support from both sides to allow a smooth velocity peak. An
+        # opposite-direction edge cannot explain a spike or its recovery.
+        neighbor_speed[1:] += np.where(same_direction, np.abs(speeds[:-1]), 0)
+        neighbor_speed[:-1] += np.where(same_direction, np.abs(speeds[1:]), 0)
     minimum = np.array([config.openness_jump_min] if stream.rotations is None else
                        [config.position_jump_min_m, config.orientation_jump_min_deg])
     blocks = np.r_[0, np.cumsum(np.diff(times) > horizon)]
     widths = np.searchsorted(times, times + horizon, side='right') - np.arange(len(times)) - 1
     # For each endpoint, retain the shortest qualifying transition only.
     starts = np.full(len(times), -1, dtype=np.int64)
-    for offset in range(1, int(widths.max())+1):
+    max_offset = min(1, int(widths.max())) if gripper else int(widths.max())
+    for offset in range(1, max_offset+1):
         left = np.flatnonzero(widths >= offset)
         right = left + offset
         valid = ((starts[right] < 0) & (blocks[left] == blocks[right])
@@ -219,7 +233,10 @@ def state_jump_intervals(stream, config):
             continue
         dt = (times[right]-times[left]) / NS_PER_SECOND
         distance = state_distances(stream, left, right)
-        expected = np.maximum(before[left], after[right]) * dt[:, None]
+        baseline = np.maximum(before[left], after[right])
+        if gripper:
+            baseline = np.maximum(baseline, neighbor_speed[left, None])
+        expected = baseline * dt[:, None]
         flagged = np.any((distance-expected > minimum)
                          & (distance > config.jump_speed_ratio*expected), axis=1)
         starts[right[flagged]] = left[flagged]
