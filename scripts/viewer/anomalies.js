@@ -10,6 +10,9 @@ const seconds = ns => (ns / 1e9).toFixed(6) + ' s';
 const interval = record => record.start_ns === record.end_ns ? seconds(record.start_ns)
   : `[${seconds(record.start_ns)}, ${seconds(record.end_ns)})`;
 const label = record => `#${record.index} · ${record.episode_id} · ${record.stream} · ${record.reason} · ${interval(record)}`;
+const streamNames = {left_eef: 'Left end effector', right_eef: 'Right end effector',
+  left_gripper: 'Left gripper', right_gripper: 'Right gripper'};
+const compactSeconds = ns => (ns / 1e9).toFixed(9).replace(/\.?0+$/, '');
 
 export class AnomalyReview {
   constructor(root, marks, onJump) {
@@ -22,6 +25,20 @@ export class AnomalyReview {
     this.episode = null;
     this.markButtons = [];
     this.get = id => root.querySelector('#' + id);
+    this.panels = ['anomaly-list', 'anomaly-filters', 'anomaly-details'].map(this.get);
+    for (const panel of this.panels) {
+      panel.querySelector('summary').addEventListener('click', () => {
+        for (const other of this.panels) if (other !== panel) other.open = false;
+      });
+    }
+    document.addEventListener('click', event => {
+      if (!root.contains(event.target)) this.closePanels();
+    });
+    root.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      const panel = this.panels.find(item => item.open);
+      if (panel) { this.closePanels(); panel.querySelector('summary').focus(); }
+    });
     for (const name of ['episode', 'stream', 'reason']) {
       this.get('anomaly-' + name).addEventListener('change', () => this.refresh());
     }
@@ -30,7 +47,12 @@ export class AnomalyReview {
     });
     this.get('anomaly-prev').addEventListener('click', () => this.step(-1));
     this.get('anomaly-next').addEventListener('click', () => this.step(1));
+    this.get('anomaly-reset').addEventListener('click', () => {
+      for (const name of ['episode', 'stream', 'reason']) this.get('anomaly-' + name).value = '';
+      this.refresh();
+    });
   }
+  closePanels() { for (const panel of this.panels) panel.open = false; }
   setReport(records) {
     this.root.hidden = records === null;
     this.records = (records || []).map((record, id) => ({...record, id}));
@@ -50,9 +72,19 @@ export class AnomalyReview {
     if (!this.filtered.some(record => record.id === this.selected)) this.selected = null;
     const select = this.get('anomaly-record');
     select.replaceChildren(new Option(this.filtered.length ? 'Choose an anomaly…' : 'No anomalies', ''));
-    for (const record of this.filtered) select.add(new Option(label(record), String(record.id)));
+    for (const record of this.filtered) {
+      const option = new Option(`#${record.index} · ${streamNames[record.stream]} · ${record.reason} · ${compactSeconds(record.start_ns)} s`, String(record.id));
+      option.title = label(record);
+      select.add(option);
+    }
     select.disabled = !this.filtered.length;
-    this.get('anomaly-count').textContent = `${this.filtered.length} / ${this.records.length} records`;
+    const filters = ['episode', 'stream', 'reason'].filter(name => this.get('anomaly-' + name).value);
+    this.get('anomaly-filter-label').textContent = filters.length ? `Filters · ${filters.length}` : 'Filters';
+    this.get('anomaly-filters').dataset.active = String(filters.length > 0);
+    this.get('anomaly-reset').disabled = !filters.length;
+    const scope = filters.map(name => `${name}: ${this.get('anomaly-' + name).value}`).join(' · ');
+    this.get('anomaly-filter-label').title = scope || 'All episodes, streams and reasons';
+    this.get('anomaly-list-caption').textContent = `${this.filtered.length} of ${this.records.length} records · ${scope || 'All episodes'}`;
     this.updateSelection();
     this.drawMarks();
   }
@@ -61,10 +93,20 @@ export class AnomalyReview {
     this.get('anomaly-record').value = index < 0 ? '' : String(this.selected);
     this.get('anomaly-prev').disabled = index <= 0;
     this.get('anomaly-next').disabled = !this.filtered.length || index === this.filtered.length - 1;
-    const record = this.records[this.selected];
+    this.get('anomaly-count').textContent = `${index < 0 ? '–' : index + 1} / ${this.filtered.length}`;
+    const record = this.selected === null ? null : this.records[this.selected];
+    this.get('anomaly-title').textContent = record
+      ? `${streamNames[record.stream]} · ${record.reason}`
+      : !this.records.length ? 'No anomalies' : !this.filtered.length ? 'No matching anomalies' : 'Choose an anomaly to review';
+    this.get('anomaly-timing').textContent = record
+      ? record.start_ns === record.end_ns ? `${compactSeconds(record.start_ns)} s · Point`
+        : `${compactSeconds(record.start_ns)}–${compactSeconds(record.end_ns)} s · Duration ${compactSeconds(record.end_ns - record.start_ns)} s`
+      : !this.records.length ? 'The report is empty.' : !this.filtered.length ? 'Try clearing the filters.' : 'Use Next or open the record list.';
+    this.get('anomaly-details').hidden = !record;
+    if (!record) this.get('anomaly-details').open = false;
     this.get('anomaly-detail').textContent = record
-      ? `${record.stream} · ${record.reason} · ${record.start_ns === record.end_ns ? 'Point' : 'Interval'} ${interval(record)} · ${record.start_ns}–${record.end_ns} ns`
-      : this.records.length ? 'Choose a record to jump to its start time.' : 'The report contains no anomalies.';
+      ? `Episode: ${record.episode_id}\nIndex: ${record.index}\nStream: ${record.stream}\nReason: ${record.reason}\nInterval: ${interval(record)}\nStart: ${record.start_ns} ns\nEnd: ${record.end_ns} ns`
+      : '';
     for (const [button, item] of this.markButtons) {
       button.setAttribute('aria-pressed', String(item.id === this.selected));
     }
@@ -72,6 +114,9 @@ export class AnomalyReview {
   select(id) {
     const record = this.records[id];
     if (!record) return;
+    const listWasOpen = this.get('anomaly-list').open;
+    this.closePanels();
+    if (listWasOpen) this.get('anomaly-list').querySelector('summary').focus();
     this.selected = id;
     this.updateSelection();
     this.onJump(record);

@@ -23,10 +23,14 @@ python scripts/viewer/export_viewer.py path/to/exported-dataset --anomalies /tmp
 `index` 按 `episodes.jsonl` 的物理行号（从 0 开始，空行计数）关联导出数据。
 报告本身只含定位信息，相机和 state 仍从对应导出目录读取。
 
-可按 episode、stream、reason 组合筛选，用记录下拉框或 Previous / Next 按报告顺序浏览。
+异常栏默认只显示当前记录序号、Previous / Next 和当前异常的流、reason、秒级时间及持续时长。
+点击序号展开记录列表；点击 Filters 可按 episode、stream、reason 组合筛选，并可一键清空条件。
+有筛选条件时入口显示条件数量，展开后可查看具体范围；序号的分母为筛选后的记录数。
+原始 episode 标识、stream、纳秒时间等信息收在 Details 中。弹层可点击外部或按 Escape 收起。
+通过记录列表或 Previous / Next 按报告顺序浏览。
 选择记录会暂停播放，切换到对应 episode，并精确跳到 `start_ns`；此后可拖动或播放查看上下文。
 当前 episode 的筛选结果按流标在共享时间轴下方，点击标记也可跳转。
-区间采用 `[start_ns, end_ns)`，起止相等时显示为单点；详情同时显示原始纳秒值。
+区间采用 `[start_ns, end_ns)`，起止相等时显示为单点；Details 同时显示精确区间和原始纳秒值。
 当前时间命中的流会在 state 信息中高亮，包括未被筛选显示的记录。
 报告顺序和重复记录均保留，不推断原因含义或合并记录。
 

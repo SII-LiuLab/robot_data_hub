@@ -73,22 +73,45 @@
   #error { color: var(--error); margin: 0 0 12px; white-space: pre-wrap; }
   #error:empty { display: none; }
   [hidden] { display: none !important; }
-  .anomaly-review { flex-shrink: 0; margin-bottom: 10px; padding: 10px 12px;
+  .anomaly-review { position: relative; flex-shrink: 0; margin-bottom: 10px; padding: 10px 12px;
     border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
-  .anomaly-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .anomaly-controls + .anomaly-controls { margin-top: 6px; }
-  .anomaly-controls select { min-height: 30px; max-width: 210px; padding: 3px 8px; }
-  .anomaly-controls button { min-height: 30px; }
-  #anomaly-record { flex: 1; min-width: 120px; max-width: none; width: 0; }
-  #anomaly-count, #anomaly-detail { color: var(--muted); font-size: 12px; }
-  #anomaly-detail { margin: 6px 0 0; overflow-wrap: anywhere; max-height: 3lh; overflow-y: auto; }
+  .anomaly-toolbar, .anomaly-nav, .anomaly-summary { display: flex; align-items: center; gap: 10px; }
+  .anomaly-toolbar { flex-wrap: wrap; gap: 6px 10px; }
+  .anomaly-toolbar > strong { font-size: 13px; }
+  .anomaly-nav { margin-left: auto; gap: 4px; }
+  .anomaly-toolbar button, .anomaly-toolbar summary { min-height: 28px; padding: 4px 8px;
+    border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .anomaly-toolbar button:hover:not(:disabled), .anomaly-toolbar summary:hover { background: var(--bg); color: var(--text); }
+  .anomaly-toolbar button:disabled { opacity: .35; cursor: default; }
+  .anomaly-toolbar summary { list-style: none; }
+  .anomaly-toolbar summary::-webkit-details-marker { display: none; }
+  .anomaly-toolbar summary::after { content: ' ▾'; }
+  .anomaly-toolbar details[open] > summary { background: var(--bg); color: var(--accent); }
+  #anomaly-count { color: var(--accent); font-variant-numeric: tabular-nums; }
+  .anomaly-popover { position: absolute; z-index: 5; top: 44px; right: 12px; left: 12px;
+    padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    box-shadow: 0 10px 30px #0002; }
+  .anomaly-controls { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+  .anomaly-controls label { display: grid; flex: 1; min-width: 120px; gap: 5px; color: var(--muted); font-size: 12px; }
+  .anomaly-controls select { width: 100%; max-width: none; min-height: 32px; }
+  #anomaly-record { width: 100%; max-width: none; padding: 4px; font-size: 13px; }
+  #anomaly-record option { padding: 7px 8px; }
+  .anomaly-popover p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+  .anomaly-summary { min-width: 0; margin-top: 5px; gap: 6px 16px; flex-wrap: wrap; }
+  #anomaly-title { font-size: 15px; overflow-wrap: anywhere; }
+  #anomaly-timing { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #anomaly-details { margin-left: auto; }
+  #anomaly-details summary { color: var(--muted); font-size: 11px; cursor: pointer; }
+  #anomaly-detail { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 ui-monospace, monospace; }
+  #anomaly-filters[data-active="true"] > summary { color: var(--accent); }
   #anomaly-marks:empty { display: none; }
   #anomaly-marks { margin: 4px 4px 0; }
   .anomaly-lane { position: relative; height: 16px; }
   .anomaly-lane > span { position: absolute; font-size: 10px; opacity: .7; pointer-events: none; }
   .anomaly-track { position: absolute; inset: 0; }
   .anomaly-mark { position: absolute; top: 2px; height: 12px; min-height: 0; min-width: 4px;
-    padding: 0; border: 1px solid var(--error); border-radius: 3px; background: var(--error); opacity: .45; cursor: pointer; }
+    padding: 0; border: 1px solid var(--error); border-radius: 3px; background: var(--error); opacity: .25; cursor: pointer; }
+  .anomaly-mark:hover { opacity: .65; }
   .anomaly-mark.point { transform: translateX(-50%); }
   .anomaly-mark[aria-pressed="true"] { opacity: 1; outline: 2px solid var(--text); z-index: 1; }
   .anomalous { color: var(--error); font-weight: 700; }
@@ -128,19 +151,37 @@
   </header>
   <p class="task"><span>Current instruction</span><strong id="instruction" aria-live="polite">Loading…</strong></p>
   <section id="anomaly-review" class="anomaly-review" aria-label="Anomaly review" hidden>
-    <div class="anomaly-controls">
+    <div class="anomaly-toolbar">
       <strong>Anomalies</strong>
-      <select id="anomaly-episode" aria-label="Filter anomalies by episode"></select>
-      <select id="anomaly-stream" aria-label="Filter anomalies by stream"></select>
-      <select id="anomaly-reason" aria-label="Filter anomalies by reason"></select>
-      <span id="anomaly-count" aria-live="polite"></span>
+      <details id="anomaly-list">
+        <summary aria-label="Choose an anomaly"><span id="anomaly-count" aria-live="polite"></span></summary>
+        <div class="anomaly-popover">
+          <p id="anomaly-list-caption">Choose a record to jump to its start time.</p>
+          <select id="anomaly-record" size="6" aria-label="Anomaly record" aria-describedby="anomaly-list-caption"></select>
+        </div>
+      </details>
+      <div class="anomaly-nav">
+        <button id="anomaly-prev" type="button">← Previous</button>
+        <button id="anomaly-next" type="button">Next →</button>
+      </div>
+      <details id="anomaly-filters">
+        <summary id="anomaly-filter-label">Filters</summary>
+        <div class="anomaly-popover anomaly-controls">
+          <label>Episode<select id="anomaly-episode" aria-label="Filter anomalies by episode"></select></label>
+          <label>Stream<select id="anomaly-stream" aria-label="Filter anomalies by stream"></select></label>
+          <label>Reason<select id="anomaly-reason" aria-label="Filter anomalies by reason"></select></label>
+          <button id="anomaly-reset" type="button">Clear filters</button>
+        </div>
+      </details>
     </div>
-    <div class="anomaly-controls">
-      <button id="anomaly-prev" type="button">← Previous</button>
-      <select id="anomaly-record" aria-label="Anomaly record"></select>
-      <button id="anomaly-next" type="button">Next →</button>
+    <div class="anomaly-summary" aria-live="polite">
+      <strong id="anomaly-title"></strong>
+      <span id="anomaly-timing"></span>
+      <details id="anomaly-details" hidden>
+        <summary>Details</summary>
+        <div class="anomaly-popover"><p id="anomaly-detail"></p></div>
+      </details>
     </div>
-    <p id="anomaly-detail" aria-live="polite"></p>
   </section>
   <div class="transport">
     <button id="play" type="button" aria-label="Play">▶ Play</button>
