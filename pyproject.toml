@@ -3,7 +3,7 @@ name = "robot-data-hub"
 version = "0.1.0"
 description = "Robot dataset selection and download tools"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "av>=18.1",
     "mcap>=1.2",

@@ -6,3 +6,5 @@ data/
 dataset/
 assets/
 debug/
+.python/
+uv.lock
