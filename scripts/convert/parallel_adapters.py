@@ -10,6 +10,21 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class _NullProgress:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def update(self, step=1):
+        pass
+
+
+def _no_progress(label, total=None, *, unit='item'):
+    return _NullProgress()
+
+
 def module(dataset):
     return importlib.import_module(f'scripts.convert.{dataset}')
 
@@ -68,13 +83,18 @@ def load_json(path):
     return json.loads(path.read_text(encoding='utf-8'))
 
 
-def discover(config):
+def discover(config, progress=_no_progress):
     dataset, source = config['dataset'], Path(config['source'])
     m = module(dataset)
     tasks, shared = [], []
     task_limit = min((v for v in (config['limit'], config['limit_episodes']) if v is not None), default=None)
     if dataset == 'abc130k':
-        for path in sorted(source.rglob('episode.mcap'))[:task_limit]:
+        found = []
+        with progress('Scanning for episode.mcap files', unit='episode') as bar:
+            for path in source.rglob('episode.mcap'):
+                found.append(path)
+                bar.update()
+        for path in sorted(found)[:task_limit]:
             tasks.append({'source': str(path.parent), 'episode_ids': [path.parent.name],
                           'inputs': [str(path), str(path.parent / 'annotation.mcap')]})
     elif dataset in ('molmoact2', 'hifi_umi'):
@@ -89,42 +109,60 @@ def discover(config):
             m.validate_source(info, load_json(meta / 'modality.json'))
             m.load_tasks(meta / 'tasks.parquet')
             shared.append(meta / 'modality.json')
-        for path in sorted(p for p in (source / 'episodes').iterdir() if p.is_dir())[:task_limit]:
-            if not re.fullmatch(r'episode_\d+', path.name):
-                raise ValueError(f'Invalid episode directory: {path}')
-            tasks.append({'source': str(path), 'episode_ids': [path.name],
-                          'inputs': [str(path / 'data.parquet'), str(path / 'episode.json'),
-                                     *(str(path / 'videos' / f'{key}.mp4') for key in m.CAMERAS)]})
+        episodes = sorted(p for p in (source / 'episodes').iterdir() if p.is_dir())
+        selected = episodes if task_limit is None else episodes[:task_limit]
+        with progress('Discovering episodes', len(selected), unit='episode') as bar:
+            for path in selected:
+                if not re.fullmatch(r'episode_\d+', path.name):
+                    raise ValueError(f'Invalid episode directory: {path}')
+                tasks.append({'source': str(path), 'episode_ids': [path.name],
+                              'inputs': [str(path / 'data.parquet'), str(path / 'episode.json'),
+                                         *(str(path / 'videos' / f'{key}.mp4') for key in m.CAMERAS)]})
+                bar.update()
     elif dataset == 'galaxea':
-        for directory in m.discover_tasks(source):
-            if task_limit is not None and len(tasks) >= task_limit:
-                break
-            info = load_json(directory / 'meta/info.json')
-            if config['params']['robot_type'] is not None and info.get('robot_type') != config['params']['robot_type']:
-                continue
-            _, cameras = m.validate_source(info)
-            metadata = m.read_jsonl(directory / 'meta/episodes.jsonl', 'episode_index')
-            m.read_jsonl(directory / 'meta/tasks.jsonl', 'task_index')
-            chunks = info['chunks_size']
-            if len(metadata) != info['total_episodes'] or type(chunks) is not int or chunks < 1:
-                raise ValueError(f'{directory}: invalid episode metadata/chunks_size')
-            shared.extend(directory / 'meta' / name for name in ('info.json', 'episodes.jsonl', 'tasks.jsonl'))
-            remaining = None if task_limit is None else task_limit - len(tasks)
-            for index in sorted(metadata)[:remaining]:
-                episode_id = f'{directory.name}_episode_{index:06d}'
-                paths = [m.source_path(directory, info['data_path'], index, chunks)]
-                paths += [m.source_path(directory, info['video_path'], index, chunks, key) for key in cameras]
-                tasks.append({'source': str(directory), 'index': index, 'episode_ids': [episode_id],
-                              'inputs': [str(p) for p in paths]})
+        directories = m.discover_tasks(source)
+        with progress('Discovering tasks', len(directories), unit='task') as bar:
+            for directory in directories:
+                if task_limit is not None and len(tasks) >= task_limit:
+                    break
+                bar.update()
+                info = load_json(directory / 'meta/info.json')
+                if config['params']['robot_type'] is not None and info.get('robot_type') != config['params']['robot_type']:
+                    continue
+                _, cameras = m.validate_source(info)
+                metadata = m.read_jsonl(directory / 'meta/episodes.jsonl', 'episode_index')
+                m.read_jsonl(directory / 'meta/tasks.jsonl', 'task_index')
+                chunks = info['chunks_size']
+                if len(metadata) != info['total_episodes'] or type(chunks) is not int or chunks < 1:
+                    raise ValueError(f'{directory}: invalid episode metadata/chunks_size')
+                shared.extend(directory / 'meta' / name for name in ('info.json', 'episodes.jsonl', 'tasks.jsonl'))
+                remaining = None if task_limit is None else task_limit - len(tasks)
+                for index in sorted(metadata)[:remaining]:
+                    episode_id = f'{directory.name}_episode_{index:06d}'
+                    paths = [m.source_path(directory, info['data_path'], index, chunks)]
+                    paths += [m.source_path(directory, info['video_path'], index, chunks, key) for key in cameras]
+                    tasks.append({'source': str(directory), 'index': index, 'episode_ids': [episode_id],
+                                  'inputs': [str(p) for p in paths]})
     elif dataset == 'agibotworld2026':
-        paths = sorted(source.rglob('*.tar.gz')) if source.is_dir() else [source]
+        if source.is_dir():
+            archives = []
+            with progress('Scanning for archives', unit='archive') as bar:
+                for path in source.rglob('*.tar.gz'):
+                    archives.append(path)
+                    bar.update()
+            paths = sorted(archives)
+        else:
+            paths = [source]
         count = 0
-        for path in paths[:config['limit']]:
-            _, _, entries = m.archive_index(path)
-            tasks.append({'source': str(path), 'episode_ids': list(entries.values()), 'inputs': [str(path)]})
-            count += len(entries)
-            if config['limit_episodes'] is not None and count >= config['limit_episodes']:
-                break
+        selected = paths if config['limit'] is None else paths[:config['limit']]
+        with progress('Indexing archives', len(selected), unit='archive') as bar:
+            for path in selected:
+                _, _, entries = m.archive_index(path)
+                tasks.append({'source': str(path), 'episode_ids': list(entries.values()), 'inputs': [str(path)]})
+                count += len(entries)
+                bar.update()
+                if config['limit_episodes'] is not None and count >= config['limit_episodes']:
+                    break
     remaining = config['limit_episodes']
     if remaining is not None:
         selected = []

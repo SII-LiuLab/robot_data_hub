@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import uuid
 
@@ -26,6 +27,78 @@ DATASETS = ('abc130k', 'molmoact2', 'hifi_umi', 'galaxea', 'agibotworld2026')
 
 class StateError(ValueError):
     """Inconsistent recovery state: never overwrite or silently skip it."""
+
+
+class Progress:
+    """Dependency-free stderr progress bar, silent when stderr is not a TTY."""
+
+    def __init__(self, label, total=None, *, unit='item'):
+        self.label = label
+        self.total = total
+        self.unit = unit
+        self.count = 0
+        self.enabled = (sys.stderr.isatty()
+                        and os.environ.get('ROBOT_DATA_HUB_NO_PROGRESS') != '1')
+        self._rendered_at = 0.0
+        self._width = 0
+
+    def __enter__(self):
+        self._render()
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def update(self, step=1):
+        self.count += step
+        if time.monotonic() - self._rendered_at >= 0.1:
+            self._render()
+
+    def _render(self):
+        if not self.enabled:
+            return
+        self._rendered_at = time.monotonic()
+        if self.total:
+            fraction = min(self.count / self.total, 1.0)
+            cells = 24
+            done = int(fraction * cells)
+            bar = '=' * done + ('>' if done < cells else '')
+            bar += ' ' * (cells - len(bar))
+            line = f'{self.label}: [{bar}] {self.count}/{self.total} ({fraction:4.0%})'
+        else:
+            line = f'{self.label}: {self.count} {self.unit}{"" if self.count == 1 else "s"}'
+        sys.stderr.write('\r\x1b[2K' + line + ' ' * max(self._width - len(line), 0))
+        sys.stderr.flush()
+        self._width = len(line)
+
+    def close(self):
+        if not self.enabled:
+            return
+        self._render()
+        sys.stderr.write('\n')
+        sys.stderr.flush()
+        self.enabled = False
+
+
+class _NullProgress:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def update(self, step=1):
+        pass
+
+
+def progress(label, total=None, *, unit='item'):
+    """Create a progress bar; rendering is disabled when stderr is not a TTY."""
+    return Progress(label, total, unit=unit)
+
+
+def _no_progress(label, total=None, *, unit='item'):
+    return _NullProgress()
 
 
 def encoded(value):
@@ -78,13 +151,15 @@ def input_stamp(path):
     return {'path': str(path), 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
 
 
-def check_inputs(stamps):
-    for stamp in stamps:
-        if input_stamp(stamp['path']) != stamp:
-            raise ValueError(f'Source changed since prepare: {stamp["path"]}; use a new output')
+def check_inputs(stamps, progress=_no_progress):
+    with progress('Verifying inputs', len(stamps), unit='file') as bar:
+        for stamp in stamps:
+            if input_stamp(stamp['path']) != stamp:
+                raise ValueError(f'Source changed since prepare: {stamp["path"]}; use a new output')
+            bar.update()
 
 
-def implementation_signature(config):
+def implementation_signature(config, progress=_no_progress):
     paths = sorted((ROOT / 'scripts/convert').glob('*.py'))
     paths += sorted((ROOT / 'scripts/robot').glob('*.py'))
     paths += [ROOT / 'docs/contract/export-contract.md']
@@ -94,7 +169,11 @@ def implementation_signature(config):
         if not directory.is_dir():
             raise ValueError(f'Model directory does not exist: {directory}')
         paths += sorted(p for p in directory.rglob('*') if p.suffix in ('.urdf', '.json') and p.is_file())
-    files = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    files = {}
+    with progress('Hashing implementation', len(paths), unit='file') as bar:
+        for path in paths:
+            files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+            bar.update()
     versions = {p: importlib.metadata.version(p) for p in
                 ('av', 'numpy', 'pyarrow', 'mcap', 'mcap-protobuf-support')}
     return digest({'files': files, 'versions': versions})
@@ -169,7 +248,7 @@ class Store:
             raise StateError(f'{episode_id}: damaged recovery state: {exc}') from exc
         return record
 
-    def audit(self, *, published=False, complete=False):
+    def audit(self, *, published=False, complete=False, progress=_no_progress):
         records = self.work / 'records'
         if records.is_symlink():
             raise StateError('Symlink records directory')
@@ -184,24 +263,26 @@ class Store:
         if actual - self.id_set:
             raise StateError('Unexpected episode directories')
         manifest, missing = [], []
-        for episode_id in self.ids:
-            state = self.state(episode_id, published=published)
-            if state is None:
-                missing.append(episode_id)
-            elif state['outcome'] == 'exported':
-                manifest.append(state['manifest'])
+        with progress('Auditing episodes', len(self.ids), unit='episode') as bar:
+            for episode_id in self.ids:
+                state = self.state(episode_id, published=published)
+                if state is None:
+                    missing.append(episode_id)
+                elif state['outcome'] == 'exported':
+                    manifest.append(state['manifest'])
+                bar.update()
         if complete and missing:
             raise StateError(f'{len(missing)} unfinished episodes, including {missing[:3]}')
         return manifest
 
-    def published(self):
+    def published(self, progress=_no_progress):
         if not self.output.exists():
             return False
         if self.dataset.exists():
             raise StateError('Both published output and working dataset exist')
         if {p.name for p in self.output.iterdir()} != {'episodes', 'episodes.jsonl'}:
             raise StateError('Existing output is not a published dataset')
-        expected = self.audit(published=True, complete=True)
+        expected = self.audit(published=True, complete=True, progress=progress)
         try:
             actual = [json.loads(line) for line in (self.output / 'episodes.jsonl').read_text().splitlines()]
         except (ValueError, OSError) as exc:
@@ -267,7 +348,7 @@ def prepare(config, output):
     source = Path(config['source'])
     if output == source or output.is_relative_to(source) or work.is_relative_to(source):
         raise ValueError('Output/work directory must be outside the input source')
-    signature = implementation_signature(config)
+    signature = implementation_signature(config, progress)
     if (work / 'plan.json').exists():
         store = Store.load(output)
         if store.plan['config'] != config or store.plan['implementation'] != signature:
@@ -277,7 +358,7 @@ def prepare(config, output):
             raise StateError('Output already exists without a matching resume plan')
         if work.exists() and any(p.name not in ('plan.json',) and not p.name.endswith('.tmp') for p in work.iterdir()):
             raise StateError('Work directory has data but no plan')
-        tasks, shared = discover(config)
+        tasks, shared = discover(config, progress)
         plan = {'version': 1, 'config': config, 'output': str(output), 'implementation': signature,
                 'tasks': tasks, 'shared_inputs': [input_stamp(p) for p in shared]}
         for task in tasks:
@@ -286,10 +367,11 @@ def prepare(config, output):
         store = Store(output, plan)
         work.mkdir(parents=True, exist_ok=True)
         atomic_json(work / 'plan.json', plan)
-    check_inputs(store.plan['shared_inputs'])
+    stamps = list(store.plan['shared_inputs'])
     for task in store.plan['tasks']:
-        check_inputs(task['inputs'])
-    if store.published():
+        stamps += task['inputs']
+    check_inputs(stamps, progress)
+    if store.published(progress):
         print(f'Already complete: {output}', flush=True)
         return store
     for name in ('records', 'errors', 'staging', 'dataset/episodes'):
@@ -306,7 +388,7 @@ def prepare(config, output):
     for directory in (work, work / 'records', work / 'errors', store.dataset):
         for path in directory.glob('.*.tmp'):
             path.unlink()
-    store.audit()
+    store.audit(progress=progress)
     print(f'Prepared {len(store.plan["tasks"])} tasks / {len(store.ids)} episodes: {work}', flush=True)
     return store
 
