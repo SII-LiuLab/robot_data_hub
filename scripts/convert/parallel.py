@@ -358,17 +358,18 @@ def prepare(config, output):
     if store.published(progress):
         print(f'Already complete: {output}', flush=True)
         return store
-    for name in ('records', 'errors', 'staging', 'dataset/episodes'):
+    for name in ('records', 'errors', 'logs', 'staging', 'dataset/episodes'):
         directory = work / name
         if directory.is_symlink():
             raise StateError(f'Symlink working directory: {directory}')
         directory.mkdir(parents=True, exist_ok=True)
-    # Only prepare may clean attempts, and only after previous workers have exited.
-    for path in (work / 'staging').iterdir():
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
+    # Only prepare may clean attempts and diagnostics, and only after previous workers have exited.
+    for name in ('logs', 'staging'):
+        for path in (work / name).iterdir():
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
     for directory in (work, work / 'records', work / 'errors', store.dataset):
         for path in directory.glob('.*.tmp'):
             path.unlink()
@@ -509,7 +510,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     for name, help_text in (
-            ('prepare', 'create or validate the plan and clean interrupted attempts; one process'),
+            ('prepare', 'create or validate the plan and clean interrupted attempts and diagnostics; one process'),
             ('run', 'local only: prepare, launch local workers, finalize')):
         launch = sub.add_parser(name, help=help_text)
         launch.add_argument('--dataset', choices=DATASETS, required=True)

@@ -118,7 +118,7 @@ AgiBot 的计划可从压缩包元数据枚举预期 episode。转换仍按包�
 ├── plan.json
 ├── records/<episode_id>.json   # 内部恢复记录，包含 manifest 所需元数据或跳过原因
 ├── errors/<episode_id>.err     # 最近一次转换失败信息，仅用于诊断
-├── logs/worker-<attempt_id>.err # 每次 CLI worker 启动的诊断，重跑保留
+├── logs/worker-<attempt_id>.err # 每次 CLI worker 启动的诊断，prepare 时清理
 ├── staging/<attempt_id>/      # 每次尝试独立，不能当作已完成结果
 └── dataset/
     └── episodes/<episode_id>/ # 已提交的完整 episode
@@ -145,7 +145,7 @@ records 属于工作目录，不进入最终数据集。最终结构遵守[目�
 
 ## 5. 自动 resume 与失败处理
 
-在上一轮 worker 已全部退出的前提下，准备阶段清理遗留 staging 和未发布的临时记录；保留 plan、正式 records 和已提交 episode。每个 episode 按下表恢复：
+在上一轮 worker 已全部退出的前提下，准备阶段清理遗留 staging、logs 诊断和未发布的临时记录；保留 plan、正式 records 和已提交 episode。每个 episode 按下表恢复：
 
 | 状态 | 处理 |
 |---|---|
