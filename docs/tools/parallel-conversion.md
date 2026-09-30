@@ -32,9 +32,14 @@ python -m scripts.convert.parallel prepare \
 **第 2 步：`worker`，由 `srun` 一次拉起全部 worker。** 
 
 ```bash
-srun python -m scripts.convert.parallel worker \
+mkdir -p dataset/export/ABC-130K.work/logs
+srun --output='dataset/export/ABC-130K.work/logs/slurm-%J-%t.out' \
+  --error='dataset/export/ABC-130K.work/logs/slurm-%J-%t.err' \
+  python -u -X faulthandler -m scripts.convert.parallel worker \
   --output-dir dataset/export/ABC-130K
 ```
+
+保留原有 `srun` 资源参数；`%J` 是 job/step ID，`%t` 是 task ID，避免多个 worker 共写一个文件。日志目录必须提前建立且所有节点可访问。`srun` 默认不会单独生成 `.err`；若未显式设置 `--error`，stderr 会随标准输出走，使用 `sbatch` 时通常在 `slurm-<jobid>.out` 中。启动器自身的报错仍在调用 `srun` 的终端或批处理日志里。参见 [srun 输出选项](https://slurm.schedmd.com/srun.html)。
 
 **第 3 步：`finalize`，单独运行一次（单进程）。**
 
@@ -55,21 +60,21 @@ python -m scripts.convert.parallel finalize \
 - `--limit-episodes N`：全局前 N 个候选 episode，包含合法跳过的 episode。它不同于原 Galaxea CLI 的“前 N 个成功导出”语义。
 - `--robot-type` 仅用于 Galaxea；TCP 和夹爪参数见 `python -m scripts.convert.parallel run --help`。
 
-转换失败返回非零退出码，诊断保存在 `<output>.work/errors/`。共享源数据必须保持不变；修复原始数据或修改转换配置/代码后，使用新输出目录。
+转换失败返回非零退出码，episode 诊断保存在 `<output>.work/errors/`，worker 级诊断保存在 `<output>.work/logs/`。共享源数据必须保持不变；修复原始数据或修改转换配置后，使用新输出目录。
 
 ## 1. 使用约定
 
 - **重新执行 prepare → worker → finalize 即可 resume**，无需手动清理文件或指定恢复位置；单机也可重跑 `run` 命令。
 - 每次运行可以改变节点数、worker 数和 CPU 预算；完成状态按 episode 保存，不与 worker 编号绑定。
 - **同一输出同时只允许一个作业。** 重跑前，上一轮所有 worker 必须已经退出；不接管仍在运行的作业。
-- 源数据保持只读且不变。resume 使用原任务清单、转换版本、模型和转换参数；不兼容的变更须使用新输出目录。
+- 源数据保持只读且不变。resume 使用原任务清单和转换参数；不兼容的配置变更须使用新输出目录。工具不校验转换代码与模型版本，改代码/模型后可以继续 resume，但需自行保证同一数据集由同一版转换逻辑产出。
 - 最终输出只在整集完成后出现；失败时保留工作目录。已完成的输出经核对属于同一计划后，再次执行直接成功返回；不接受无关的已有输出。
 
 ## 2. 固定任务清单与分配
 
 作业启动时，由单个准备进程生成 `<output>.work/plan.json`，通过临时文件加原子 rename 发布；成功后才启动 workers。resume 读取并校验已有 plan，不重新发现任务或改动顺序。
 
-plan 保存源数据身份、转换版本、模型与转换参数，以及有固定顺序的任务列表。每个任务记录输入位置和预期 episode ID；episode ID 必须在整个计划中唯一，且只能属于一个任务。筛选和数量限制在准备阶段确定，不由每个 worker 各自应用。节点数、worker 数和 CPU 预算不参与计划兼容性判断。实现记录转换代码、模型 JSON/URDF 的内容指纹及依赖版本；对源文件检查大小和修改时间，不全量散列视频。新增源 episode 不自动加入已有计划。
+plan 保存源数据身份、转换参数，以及有固定顺序的任务列表。每个任务记录输入位置和预期 episode ID；episode ID 必须在整个计划中唯一，且只能属于一个任务。筛选和数量限制在准备阶段确定，不由每个 worker 各自应用。节点数、worker 数和 CPU 预算不参与计划兼容性判断。对源文件检查大小和修改时间，不全量散列视频。新增源 episode 不自动加入已有计划。
 
 Slurm 每个 task 启动一个 worker。分配使用前两项环境变量，CPU 预算由 Slurm 绑定：
 
@@ -113,6 +118,7 @@ AgiBot 的计划可从压缩包元数据枚举预期 episode。转换仍按包�
 ├── plan.json
 ├── records/<episode_id>.json   # 内部恢复记录，包含 manifest 所需元数据或跳过原因
 ├── errors/<episode_id>.err     # 最近一次转换失败信息，仅用于诊断
+├── logs/worker-<attempt_id>.err # 每次 CLI worker 启动的诊断，重跑保留
 ├── staging/<attempt_id>/      # 每次尝试独立，不能当作已完成结果
 └── dataset/
     └── episodes/<episode_id>/ # 已提交的完整 episode
@@ -150,6 +156,16 @@ records 属于工作目录，不进入最终数据集。最终结构遵守[目�
 | 正式目录缺少 record、record 损坏、skipped 却有目录等矛盾状态 | 报告状态损坏，停止，不静默跳过或覆盖 |
 
 失败时记录 episode ID、输入位置和 traceback，继续处理本 worker 的后续任务；worker 结束时若有失败，返回非零退出码。失败记录不参与完成判断，下次运行自动重试未提交 episode；成功后清除对应旧错误记录。同一轮不无限重试。
+
+CLI worker 在解析 Slurm 环境变量、加载依赖和 plan 之前建立独立日志，记录主机、PID、job/step/rank、当前阶段和任务输入。启动失败、输入变化、恢复状态损坏和 Python 中断均保留完整 traceback；正常返回时记录退出码。即使运行成功也保留此日志，`.err` 文件存在本身不代表失败。原生崩溃（如 SIGSEGV、SIGABRT）由 `faulthandler` 尽可能保存 Python 调用栈。
+
+`errors/` 为空不能说明 worker 没有失败：其中仅记录 episode 转换异常。SIGKILL（包括部分 OOM 终止）、节点故障，以及 Python 启动前的错误无法靠 Python 异常处理写 traceback；SIGKILL 前已刷新的 worker 日志可帮助定位最后一个任务。若日志目录本身不可写，也只能从 stderr 或 Slurm 日志排查。Slurm 作业可在提交环境查询：
+
+```bash
+sacct -j JOB_ID --format=JobID,State,ExitCode,Elapsed,MaxRSS,NodeList
+```
+
+`ExitCode` 格式为 `退出码:信号`，结合 `OUT_OF_MEMORY`、`TIMEOUT`、`CANCELLED` 等状态判断；不要只凭一个非零码推断 OOM。参见 [Slurm 退出码](https://slurm.schedmd.com/job_exit_code.html)和 [sacct](https://slurm.schedmd.com/sacct.html)。
 
 已提交结果保持不变，未提交的 episode 从头转换，不做视频帧级断点恢复。普通进程中断最多损失当时尚未提交的转换工作。
 

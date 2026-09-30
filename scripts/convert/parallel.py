@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import faulthandler
 import hashlib
-import importlib.metadata
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -157,26 +159,6 @@ def check_inputs(stamps, progress=_no_progress):
             if input_stamp(stamp['path']) != stamp:
                 raise ValueError(f'Source changed since prepare: {stamp["path"]}; use a new output')
             bar.update()
-
-
-def implementation_signature(config, progress=_no_progress):
-    paths = sorted((ROOT / 'scripts/convert').glob('*.py'))
-    paths += sorted((ROOT / 'scripts/robot').glob('*.py'))
-    paths += [ROOT / 'docs/contract/export-contract.md']
-    model_dir = config.get('model_dir')
-    if model_dir:
-        directory = Path(model_dir)
-        if not directory.is_dir():
-            raise ValueError(f'Model directory does not exist: {directory}')
-        paths += sorted(p for p in directory.rglob('*') if p.suffix in ('.urdf', '.json') and p.is_file())
-    files = {}
-    with progress('Hashing implementation', len(paths), unit='file') as bar:
-        for path in paths:
-            files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-            bar.update()
-    versions = {p: importlib.metadata.version(p) for p in
-                ('av', 'numpy', 'pyarrow', 'mcap', 'mcap-protobuf-support')}
-    return digest({'files': files, 'versions': versions})
 
 
 def validate_plan(plan):
@@ -331,8 +313,8 @@ class Store:
 
     def failure(self, episode_id, source, exc):
         message = f'{episode_id}\nInput: {source}\n' + ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        atomic_text(self.work / 'errors' / f'{episode_id}.err', message)
         print(message, file=sys.stderr, flush=True)
+        atomic_text(self.work / 'errors' / f'{episode_id}.err', message)
 
 
 def require_single_process():
@@ -348,18 +330,20 @@ def prepare(config, output):
     source = Path(config['source'])
     if output == source or output.is_relative_to(source) or work.is_relative_to(source):
         raise ValueError('Output/work directory must be outside the input source')
-    signature = implementation_signature(config, progress)
+    model_dir = config.get('model_dir')
+    if model_dir and not Path(model_dir).is_dir():
+        raise ValueError(f'Model directory does not exist: {model_dir}')
     if (work / 'plan.json').exists():
         store = Store.load(output)
-        if store.plan['config'] != config or store.plan['implementation'] != signature:
-            raise ValueError('Incompatible conversion config/code/model; use a new output')
+        if store.plan['config'] != config:
+            raise ValueError('Incompatible conversion config; use a new output')
     else:
         if output.exists():
             raise StateError('Output already exists without a matching resume plan')
-        if work.exists() and any(p.name not in ('plan.json',) and not p.name.endswith('.tmp') for p in work.iterdir()):
+        if work.exists() and any(p.name not in ('plan.json', 'logs') and not p.name.endswith('.tmp') for p in work.iterdir()):
             raise StateError('Work directory has data but no plan')
         tasks, shared = discover(config, progress)
-        plan = {'version': 1, 'config': config, 'output': str(output), 'implementation': signature,
+        plan = {'version': 1, 'config': config, 'output': str(output),
                 'tasks': tasks, 'shared_inputs': [input_stamp(p) for p in shared]}
         for task in tasks:
             task['inputs'] = [input_stamp(p) for p in task['inputs']]
@@ -404,22 +388,58 @@ def configure_worker():
     pa.set_io_thread_count(1)
 
 
-def worker(output, worker_id, worker_count):
+@contextmanager
+def worker_diagnostics(output):
+    """Keep CLI startup failures and native crash stacks outside episode records."""
+    output = Path(output).resolve()
+    directory = output.with_name(output.name + '.work') / 'logs'
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f'worker-{uuid.uuid4().hex}.err'
+    with path.open('x', encoding='utf-8', buffering=1) as handle:
+        def report(message):
+            print(f'{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())} {message}',
+                  file=handle, flush=True)
+
+        report(f'Start host={socket.gethostname()} pid={os.getpid()} output={output}')
+        report(f'Python: {sys.executable}; argv={sys.argv!r}')
+        for key in ('SLURM_JOB_ID', 'SLURM_STEP_ID', 'SLURM_PROCID', 'SLURM_NTASKS'):
+            report(f'{key}={os.environ.get(key, "<unset>")}')
+        print(f'Worker diagnostics: {path}', file=sys.stderr, flush=True)
+        was_enabled = faulthandler.is_enabled()
+        faulthandler.enable(file=handle)
+        try:
+            yield report
+        except BaseException:
+            report('Worker terminated by exception:')
+            traceback.print_exc(file=handle)
+            handle.flush()
+            raise
+        finally:
+            faulthandler.disable()
+            if was_enabled:
+                faulthandler.enable()
+
+
+def worker(output, worker_id, worker_count, *, report=None):
+    report = report or (lambda message: None)
+    report(f'Worker {worker_id}/{worker_count}: configuring dependencies')
     if worker_count < 1 or not 0 <= worker_id < worker_count:
         raise ValueError('Require worker_count > 0 and 0 <= worker_id < worker_count')
     configure_worker()
     from scripts.convert.parallel_adapters import Adapter
+    report('Loading plan')
     store = Store.load(output)
-    if store.plan['implementation'] != implementation_signature(store.plan['config']):
-        raise ValueError('Conversion code/model changed since prepare')
+    report('Checking shared inputs and published output')
     check_inputs(store.plan['shared_inputs'])
     if store.published():
         return 0
+    report('Initializing adapter')
     adapter = Adapter(store.plan['config'])
     failures = 0
     for index, task in enumerate(store.plan['tasks']):
         if index % worker_count != worker_id:
             continue
+        report(f'Task {index}: input={task["source"]}; episodes={task["episode_ids"]}')
         check_inputs(task['inputs'])
         pending = [i for i in task['episode_ids'] if store.state(i) is None]
         if not pending:
@@ -430,6 +450,7 @@ def worker(output, worker_id, worker_count):
                 if isinstance(exc, StateError):
                     raise exc
                 failures += 1
+                report(f'Episode {episode_id} failed: {type(exc).__name__}: {exc}')
                 store.failure(episode_id, task['source'], exc)
             try:
                 adapter.process(task, pending, Path(temporary), store, failed)
@@ -514,9 +535,12 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == 'worker':
-            rank = args.worker_id if args.worker_id is not None else int(os.environ['SLURM_PROCID'])
-            count = args.worker_count if args.worker_count is not None else int(os.environ['SLURM_NTASKS'])
-            return worker(args.output_dir, rank, count)
+            with worker_diagnostics(args.output_dir) as report:
+                rank = args.worker_id if args.worker_id is not None else int(os.environ['SLURM_PROCID'])
+                count = args.worker_count if args.worker_count is not None else int(os.environ['SLURM_NTASKS'])
+                status = worker(args.output_dir, rank, count, report=report)
+                report(f'Worker exit code: {status}; episode errors: {args.output_dir}.work/errors/')
+                return status
         if args.command == 'finalize':
             finalize(args.output_dir)
             return 0

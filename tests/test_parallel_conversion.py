@@ -201,14 +201,11 @@ class ResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(parallel.StateError, 'damaged recovery'):
             parallel.prepare(self.config, self.output)
 
-    def test_config_code_model_and_source_changes_reject_resume(self):
+    def test_config_and_source_changes_reject_resume(self):
         changed = copy.deepcopy(self.config)
         changed['params']['gripper_open_rad'] += .1
         with self.assertRaisesRegex(ValueError, 'Incompatible'):
             parallel.prepare(changed, self.output)
-        with patch.object(parallel, 'implementation_signature', return_value='changed-code-or-model'):
-            with self.assertRaisesRegex(ValueError, 'Incompatible'):
-                parallel.prepare(self.config, self.output)
         source_file = self.source / 'episodes' / self.episode_id / 'episode.json'
         source_file.write_text(source_file.read_text() + ' ')
         with self.assertRaisesRegex(ValueError, 'Source changed'):
@@ -239,6 +236,80 @@ class ResumeTests(unittest.TestCase):
                                     capture_output=True, text=True, timeout=90, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(manifest(output)), 2)
+        logs = list(output.with_name(output.name + '.work').glob('logs/worker-*.err'))
+        self.assertEqual(len(logs), 2)
+        self.assertTrue(all('Worker exit code: 0' in p.read_text() for p in logs))
+
+    def test_cli_input_check_failure_keeps_task_and_traceback(self):
+        source_file = self.source / 'episodes' / self.episode_id / 'episode.json'
+        source_file.write_text(source_file.read_text() + ' ')
+        command = [sys.executable, '-m', 'scripts.convert.parallel', 'worker',
+                   '--output-dir', str(self.output), '--worker-id', '0', '--worker-count', '1']
+        for _ in range(2):
+            result = subprocess.run(command, cwd=parallel.ROOT, capture_output=True,
+                                    text=True, timeout=60, check=False)
+            self.assertEqual(result.returncode, 1, result.stderr)
+        logs = list((self.store.work / 'logs').glob('worker-*.err'))
+        self.assertEqual(len(logs), 2)  # Retries must preserve earlier diagnostics.
+        for path in logs:
+            text = path.read_text()
+            for expected in ('host=', 'pid=', 'Worker 0/1', 'Task 0:',
+                             self.episode_id, 'Traceback', 'Source changed since prepare'):
+                self.assertIn(expected, text)
+        self.assertEqual(list((self.store.work / 'errors').iterdir()), [])
+
+    def test_cli_missing_slurm_environment_is_logged_before_worker_starts(self):
+        output = self.root / 'not_prepared'
+        env = {k: v for k, v in os.environ.items() if not k.startswith('SLURM_')}
+        result = subprocess.run(
+            [sys.executable, '-m', 'scripts.convert.parallel', 'worker', '--output-dir', str(output)],
+            env=env, cwd=parallel.ROOT, capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        log, = output.with_name(output.name + '.work').glob('logs/worker-*.err')
+        self.assertIn("KeyError: 'SLURM_PROCID'", log.read_text())
+        self.assertIn('Traceback', log.read_text())
+        # A diagnostics-only directory must not prevent a subsequent prepare.
+        parallel.prepare(self.config, output)
+
+    def test_cli_dependency_failure_and_interrupt_are_logged(self):
+        code = '''
+import sys
+from unittest.mock import patch
+from scripts.convert import parallel
+kind = sys.argv.pop()
+error = ImportError('injected dependency failure') if kind == 'import' else KeyboardInterrupt()
+with patch.object(parallel, 'configure_worker', side_effect=error):
+    sys.exit(parallel.main())
+'''
+        for kind, status, expected in (('import', 1, 'ImportError: injected dependency failure'),
+                                       ('interrupt', 130, 'KeyboardInterrupt')):
+            output = self.root / kind
+            result = subprocess.run(
+                [sys.executable, '-c', code, 'worker', '--output-dir', str(output),
+                 '--worker-id', '0', '--worker-count', '1', kind],
+                cwd=parallel.ROOT, capture_output=True, text=True, timeout=60, check=False)
+            self.assertEqual(result.returncode, status, result.stderr)
+            log, = output.with_name(output.name + '.work').glob('logs/worker-*.err')
+            self.assertIn(expected, log.read_text())
+            self.assertIn('Traceback', log.read_text())
+
+    def test_cli_native_abort_keeps_fault_stack(self):
+        code = '''
+import os, resource, sys
+from unittest.mock import patch
+from scripts.convert import parallel
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+with patch.object(parallel, 'configure_worker', side_effect=os.abort):
+    sys.exit(parallel.main())
+'''
+        result = subprocess.run(
+            [sys.executable, '-c', code, 'worker', '--output-dir', str(self.output),
+             '--worker-id', '0', '--worker-count', '1'],
+            cwd=parallel.ROOT, capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(result.returncode, -signal.SIGABRT, result.stderr)
+        log, = (self.store.work / 'logs').glob('worker-*.err')
+        self.assertIn('Fatal Python error: Aborted', log.read_text())
+        self.assertIn('parallel.py', log.read_text())
 
     def test_sigkill_leaves_an_attempt_that_next_run_recovers(self):
         # Kill after persisting metadata; no Python finally blocks can clean up.
