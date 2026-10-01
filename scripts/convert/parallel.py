@@ -244,18 +244,20 @@ class Store:
         actual = {p.name for p in episodes.iterdir()} if episodes.exists() else set()
         if actual - self.id_set:
             raise StateError('Unexpected episode directories')
-        manifest, missing = [], []
+        exported, skipped, missing = [], [], []
         with progress('Auditing episodes', len(self.ids), unit='episode') as bar:
             for episode_id in self.ids:
                 state = self.state(episode_id, published=published)
                 if state is None:
                     missing.append(episode_id)
                 elif state['outcome'] == 'exported':
-                    manifest.append(state['manifest'])
+                    exported.append(state['manifest'])
+                else:
+                    skipped.append(episode_id)
                 bar.update()
         if complete and missing:
             raise StateError(f'{len(missing)} unfinished episodes, including {missing[:3]}')
-        return manifest
+        return exported, skipped, missing
 
     def published(self, progress=_no_progress):
         if not self.output.exists():
@@ -264,7 +266,7 @@ class Store:
             raise StateError('Both published output and working dataset exist')
         if {p.name for p in self.output.iterdir()} != {'episodes', 'episodes.jsonl'}:
             raise StateError('Existing output is not a published dataset')
-        expected = self.audit(published=True, complete=True, progress=progress)
+        expected, _, _ = self.audit(published=True, complete=True, progress=progress)
         try:
             actual = [json.loads(line) for line in (self.output / 'episodes.jsonl').read_text().splitlines()]
         except (ValueError, OSError) as exc:
@@ -373,7 +375,11 @@ def prepare(config, output):
     for directory in (work, work / 'records', work / 'errors', store.dataset):
         for path in directory.glob('.*.tmp'):
             path.unlink()
-    store.audit(progress=progress)
+    exported, skipped, missing = store.audit(progress=progress)
+    total = len(store.ids)
+    done = len(exported) + len(skipped)
+    print(f'Progress: {done}/{total} ({done / total:.1%}) episodes done '
+          f'({len(exported)} exported, {len(skipped)} skipped, {len(missing)} pending)', flush=True)
     print(f'Prepared {len(store.plan["tasks"])} tasks / {len(store.ids)} episodes: {work}', flush=True)
     return store
 
@@ -470,7 +476,7 @@ def finalize(output):
     store = Store.load(output)
     if store.published():
         return
-    manifest = store.audit(complete=True)
+    manifest, _, _ = store.audit(complete=True)
     atomic_text(store.dataset / 'episodes.jsonl', ''.join(encoded(r) + '\n' for r in manifest))
     if store.output.exists():
         raise StateError('Output appeared before publication')

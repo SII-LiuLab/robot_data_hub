@@ -64,7 +64,7 @@ python -m scripts.convert.parallel finalize \
 
 ## 1. 使用约定
 
-- **重新执行 prepare → worker → finalize 即可 resume**，无需手动清理文件或指定恢复位置；单机也可重跑 `run` 命令。
+- **重新执行 prepare → worker → finalize 即可 resume**，无需手动清理文件或指定恢复位置；单机也可重跑 `run` 命令。prepare 会打印当前进度（百分比及已导出、合法跳过与待处理 episode 数），便于确认续跑起点。
 - 每次运行可以改变节点数、worker 数和 CPU 预算；完成状态按 episode 保存，不与 worker 编号绑定。
 - **同一输出同时只允许一个作业。** 重跑前，上一轮所有 worker 必须已经退出；不接管仍在运行的作业。
 - 源数据保持只读且不变。resume 使用原任务清单和转换参数；不兼容的配置变更须使用新输出目录。工具不校验转换代码与模型版本，改代码/模型后可以继续 resume，但需自行保证同一数据集由同一版转换逻辑产出。
