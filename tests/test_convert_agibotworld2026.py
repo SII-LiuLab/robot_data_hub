@@ -1,13 +1,18 @@
 import math
+import io
 import json
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from scripts.convert.agibotworld2026 import (
     G2FK, ROOT, STATE_FIELDS, pose_matrix,
-    camera_id, instructions, openness, seconds_to_ns, source_fields,
+    camera_id, instructions, openness, read_episode, seconds_to_ns, source_fields,
     verify_stationary_base,
 )
 
@@ -124,6 +129,67 @@ class AgibotWorld2026PoseTests(unittest.TestCase):
         sample['state/end/arm_orientation'] = [0] * 8
         with self.assertRaisesRegex(ValueError, 'quaternion'):
             self.fk.poses(*self.pack(sample))
+
+    def test_zero_base_pose_episode_uses_verified_fixed_base(self):
+        sample = self.samples[0].copy()
+        expected = self.fk.poses(*self.pack(sample), True)
+        sample['state/robot/position'] = [0.] * 3
+        sample['state/robot/orientation'] = [0.] * 4
+        state, indices = self.pack(sample)
+        original_indices = {key: value[:] for key, value in indices.items()}
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary)
+            self.read_source_episode([state, state], indices, [[0., 0.]] * 2, destination)
+            for side, pose in zip(('left', 'right'), expected):
+                table = pq.read_table(destination / 'state' / f'{side}_eef.parquet')
+                np.testing.assert_allclose(table['pose'].to_pylist(), [pose, pose])
+            self.assertEqual(indices, original_indices)
+
+    def test_zero_base_pose_rejects_movement_and_invalid_partial_odometry(self):
+        sample = self.samples[0].copy()
+        sample['state/robot/position'] = [0.] * 3
+        sample['state/robot/orientation'] = [0.] * 4
+        state, indices = self.pack(sample)
+        valid = state.copy()
+        valid[indices['state/robot/orientation'][-1]] = 1.
+        displaced = state.copy()
+        displaced[indices['state/robot/position'][0]] = 0.1
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary)
+            for command in (0.1, math.nan):
+                with self.subTest(command=command), self.assertRaisesRegex(ValueError, 'base velocity'):
+                    self.read_source_episode([state, state], indices,
+                                             [[0., 0.], [command, 0.]], destination)
+            for states in ([valid, state], [displaced, displaced]):
+                with self.subTest(states=states), self.assertRaisesRegex(ValueError, 'quaternion'):
+                    self.read_source_episode(states, indices, [[0., 0.]] * 2, destination)
+
+    def test_recorded_base_pose_preserves_motion_without_action_column(self):
+        sample = self.samples[0].copy()
+        sample['state/robot/position'] = [2., -1., 0.3]
+        sample['state/robot/orientation'] = [0., 0., 0., 1.]
+        state, indices = self.pack(sample)
+        expected = self.fk.poses(state, indices)
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary)
+            self.read_source_episode([state, state], indices, None, destination)
+            for side, pose in zip(('left', 'right'), expected):
+                table = pq.read_table(destination / 'state' / f'{side}_eef.parquet')
+                np.testing.assert_allclose(table['pose'].to_pylist(), [pose, pose])
+
+    def read_source_episode(self, states, indices, actions, destination):
+        columns = {'observation.state': states, 'timestamp': [0., 0.1],
+                   'frame_index': [0, 1], 'episode_index': [0, 0]}
+        if actions is not None:
+            columns['action'] = actions
+        data = io.BytesIO()
+        pq.write_table(pa.table(columns), data)
+        archive = SimpleNamespace(extractfile=lambda member: io.BytesIO(data.getvalue()))
+        info = {'features': {'action': {'field_descriptions': {
+            'action/robot/velocity': {'indices': [0, 1]},
+        }}}}
+        return read_episode(SimpleNamespace(name='data/data/chunk-000/episode_000000.parquet'),
+                            archive, info, indices, self.fk, destination)
 
 
 if __name__ == '__main__':

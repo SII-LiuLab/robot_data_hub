@@ -171,13 +171,10 @@ def instructions(info, episode_index, task, times):
 
 
 def read_episode(member, archive, info, indices, fk, destination):
-    missing_base_pose = not indices['state/robot/position']
-    table = pq.read_table(io.BytesIO(archive.extractfile(member).read()),
-                          columns=['observation.state', 'timestamp', 'frame_index',
-                                   'episode_index'] + (['action'] if missing_base_pose else []))
+    data = io.BytesIO(archive.extractfile(member).read())
+    table = pq.read_table(
+        data, columns=['observation.state', 'timestamp', 'frame_index', 'episode_index'])
     rows = table.to_pydict()
-    if missing_base_pose:
-        verify_stationary_base(info, rows['action'])
     episode_index = int(member.name.rsplit('_', 1)[-1].split('.')[0])
     if not rows['timestamp'] or any(v != episode_index for v in rows['episode_index']):
         raise ValueError(f'{member.name}: invalid episode rows')
@@ -189,9 +186,20 @@ def read_episode(member, archive, info, indices, fk, destination):
     if times[0] != 0:
         # Source LeRobot timestamps are already relative to each episode.
         raise ValueError(f'{member.name}: expected episode-relative timestamp starting at zero')
+    base_indices = indices['state/robot/position'] + indices['state/robot/orientation']
+    # Some stationary episodes declare odometry fields but fill the entire
+    # episode with zero position and zero quaternion as a missing-pose marker.
+    missing_base_pose = not base_indices or all(
+        all(state[i] == 0 for i in base_indices) for state in rows['observation.state'])
+    pose_indices = indices
+    if missing_base_pose:
+        data.seek(0)
+        actions = pq.read_table(data, columns=['action']).to_pydict()['action']
+        verify_stationary_base(info, actions)
+        pose_indices = {**indices, 'state/robot/position': [], 'state/robot/orientation': []}
     values = {'left_eef': [], 'right_eef': [], 'left_gripper': [], 'right_gripper': []}
     for state in rows['observation.state']:
-        left, right = fk.poses(state, indices, missing_base_pose)
+        left, right = fk.poses(state, pose_indices, missing_base_pose)
         values['left_eef'].append(left)
         values['right_eef'].append(right)
         values['left_gripper'].append(openness(state[indices['state/left_effector/position'][0]]))
