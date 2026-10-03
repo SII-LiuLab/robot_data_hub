@@ -150,8 +150,8 @@ class AgibotWorld2026PoseTests(unittest.TestCase):
         sample['state/robot/position'] = [0.] * 3
         sample['state/robot/orientation'] = [0.] * 4
         state, indices = self.pack(sample)
-        valid = state.copy()
-        valid[indices['state/robot/orientation'][-1]] = 1.
+        corrupted = state.copy()
+        corrupted[indices['state/robot/orientation'][-1]] = 0.5
         displaced = state.copy()
         displaced[indices['state/robot/position'][0]] = 0.1
         with tempfile.TemporaryDirectory() as temporary:
@@ -160,9 +160,33 @@ class AgibotWorld2026PoseTests(unittest.TestCase):
                 with self.subTest(command=command), self.assertRaisesRegex(ValueError, 'base velocity'):
                     self.read_source_episode([state, state], indices,
                                              [[0., 0.], [command, 0.]], destination)
-            for states in ([valid, state], [displaced, displaced]):
+            for states in ([corrupted, state], [displaced, displaced]):
                 with self.subTest(states=states), self.assertRaisesRegex(ValueError, 'quaternion'):
                     self.read_source_episode(states, indices, [[0., 0.]] * 2, destination)
+
+    def test_partial_zero_base_pose_preserves_last_recorded_reference(self):
+        sample = self.samples[0].copy()
+        sample['state/robot/position'] = [2., -1., 0.3]
+        sample['state/robot/orientation'] = [0., 0., math.sin(0.2), math.cos(0.2)]
+        first, indices = self.pack(sample)
+        sample['state/robot/position'] = [2.01, -1., 0.3]
+        last, _ = self.pack(sample)
+        sample['state/robot/position'] = [0.] * 3
+        sample['state/robot/orientation'] = [0.] * 4
+        missing, _ = self.pack(sample)
+        first_poses = self.fk.poses(first, indices)
+        last_poses = self.fk.poses(last, indices)
+        states = [missing, first, missing, last, missing]
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary)
+            self.read_source_episode(states, indices, [[0., 0.]] * 5, destination)
+            for i, side in enumerate(('left', 'right')):
+                table = pq.read_table(destination / 'state' / f'{side}_eef.parquet')
+                expected = [first_poses[i]] * 3 + [last_poses[i]] * 2
+                np.testing.assert_allclose(table['pose'].to_pylist(), expected)
+            with self.assertRaisesRegex(ValueError, 'base velocity'):
+                self.read_source_episode(states, indices,
+                                         [[0., 0.]] * 4 + [[0.1, 0.]], destination)
 
     def test_recorded_base_pose_preserves_motion_without_action_column(self):
         sample = self.samples[0].copy()
@@ -178,8 +202,8 @@ class AgibotWorld2026PoseTests(unittest.TestCase):
                 np.testing.assert_allclose(table['pose'].to_pylist(), [pose, pose])
 
     def read_source_episode(self, states, indices, actions, destination):
-        columns = {'observation.state': states, 'timestamp': [0., 0.1],
-                   'frame_index': [0, 1], 'episode_index': [0, 0]}
+        columns = {'observation.state': states, 'timestamp': [i * 0.1 for i in range(len(states))],
+                   'frame_index': list(range(len(states))), 'episode_index': [0] * len(states)}
         if actions is not None:
             columns['action'] = actions
         data = io.BytesIO()

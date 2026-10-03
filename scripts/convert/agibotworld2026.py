@@ -187,16 +187,29 @@ def read_episode(member, archive, info, indices, fk, destination):
         # Source LeRobot timestamps are already relative to each episode.
         raise ValueError(f'{member.name}: expected episode-relative timestamp starting at zero')
     base_indices = indices['state/robot/position'] + indices['state/robot/orientation']
-    # Some stationary episodes declare odometry fields but fill the entire
-    # episode with zero position and zero quaternion as a missing-pose marker.
-    missing_base_pose = not base_indices or all(
-        all(state[i] == 0 for i in base_indices) for state in rows['observation.state'])
+    # Stationary episodes can use zero position AND zero quaternion as a
+    # missing-pose marker, either throughout or partway through an episode.
+    missing_frames = [all(state[i] == 0 for i in base_indices)
+                      for state in rows['observation.state']]
+    missing_base_pose = all(missing_frames)
     pose_indices = indices
-    if missing_base_pose:
+    if any(missing_frames):
         data.seek(0)
         actions = pq.read_table(data, columns=['action']).to_pydict()['action']
         verify_stationary_base(info, actions)
+    if missing_base_pose:
         pose_indices = {**indices, 'state/robot/position': [], 'state/robot/orientation': []}
+    elif any(missing_frames):
+        # Keep the measured reference frame rather than jumping to identity
+        # when odometry drops out. Leading gaps use the first recorded pose.
+        reference = next(state for state, missing in zip(rows['observation.state'], missing_frames)
+                         if not missing)
+        for state, missing in zip(rows['observation.state'], missing_frames):
+            if missing:
+                for i in base_indices:
+                    state[i] = reference[i]
+            else:
+                reference = state
     values = {'left_eef': [], 'right_eef': [], 'left_gripper': [], 'right_gripper': []}
     for state in rows['observation.state']:
         left, right = fk.poses(state, pose_indices, missing_base_pose)

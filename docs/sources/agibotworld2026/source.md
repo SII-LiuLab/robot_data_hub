@@ -37,6 +37,6 @@ T_fixed_tcp = T_fixed_base · T_base_arm_base(waist) · T_arm_base_flange(source
 
 逐集指令优先选 `instruction_segments` 的 `default` track：其区间是 `[start_frame_index, end_frame_index)`；其它 track 可能交叠，不并入单一指令时间轴。`default` 的空白区间与没有 `default` track 的整集使用 `episodes.jsonl.tasks[0]`。末尾 `end_frame_index == episode_length` 映射到最后一帧的时间戳，以满足目标契约的整集终点定义。
 
-完整模仿学习数据中还存在底盘字段有索引、但某个 episode 的底盘位置和四元数整集全零的情况，例如 `task_3777/368929_370517.tar.gz` 的 `episode_000001`。根据该批数据的使用者确认，这表示底盘未移动、未记录位姿；转换器逐集检查位置和四元数均全零，并验证底盘速度命令全零后，沿用固定底盘参考系。只在部分帧出现零四元数、位置非零而四元数全零、或底盘速度命令非零的情况仍报错；有效实测底盘位姿照常使用。
+完整模仿学习数据中还存在底盘字段有索引、但底盘位置和四元数一起全零的缺失记录。例如 `task_3777/368929_370517.tar.gz` 的 `episode_000001` 整集全零；`task_3402/375260_377477.tar.gz` 的 `episode_000056` 则前 1655 帧有有效位姿，后 858 帧全零。根据该批数据的使用者确认，未移动的底盘可能不记录位姿；转换器验证整集底盘速度命令全零后，整集缺失时使用固定底盘参考系，部分缺失时沿用之前最近的实测底盘位姿（开头缺失时使用首个实测位姿）。有效实测位姿保留；位置非零而四元数全零、其它无效四元数或缺失位姿时底盘速度命令非零的情况仍报错。
 
 源格式说明：[AgiBot World 2026 官方数据页](https://huggingface.co/datasets/agibot-world/AgiBotWorld2026)。
