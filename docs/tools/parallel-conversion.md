@@ -49,6 +49,33 @@ python -m scripts.convert.parallel finalize \
 
 `--dataset` 支持 `abc130k`、`molmoact2`、`hifi_umi`、`galaxea`、`agibotworld2026`。`--model-dir` 默认为仓库中对应的模型；Galaxea 的该参数指向包含两个本体模型包的父目录。
 
+MolmoAct2-BimanualYAM 的准备命令：
+
+```bash
+python -m scripts.convert.parallel prepare \
+  --dataset molmoact2 \
+  --input-dir dataset/raw/MolmoAct2-BimanualYAM \
+  --output-dir dataset/export/MolmoAct2-BimanualYAM
+```
+
+HiFi-UMI-2K 的准备命令：
+
+```bash
+python -m scripts.convert.parallel prepare \
+  --dataset hifi_umi \
+  --input-dir dataset/raw/HiFi-UMI-2K \
+  --output-dir dataset/export/HiFi-UMI-2K
+```
+
+Galaxea 的准备命令：
+
+```bash
+python -m scripts.convert.parallel prepare \
+  --dataset galaxea \
+  --input-dir dataset/raw/Galaxea-Open-World-Dataset \
+  --output-dir dataset/export/Galaxea-Open-World-Dataset
+```
+
 AgiBot World 2026 模仿学习数据的准备命令：
 
 ```bash
@@ -57,6 +84,8 @@ python -m scripts.convert.parallel prepare \
   --input-dir dataset/raw/AgiBotWorld2026/ImitationLearning \
   --output-dir dataset/export/AgiBotWorld2026
 ```
+
+以上各数据集准备完成后，按第 2、3 步执行 `worker` 和 `finalize`，将 `--output-dir` 替换为对应准备命令中的输出目录。
 
 抽样参数在首次准备时固定，resume 不能更改：
 
