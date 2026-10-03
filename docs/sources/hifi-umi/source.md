@@ -5,8 +5,13 @@
 
 ## 文件组织与字段
 
-原始发布按 shard 组织，每个 shard 是独立的 LeRobot v3 数据集；episode 编号只在
-shard 内唯一。本项目下载器 `scripts/download/hifi_umi_subset.py` 选择一个 shard，
+原始发布按 `chunk-XXXX/part-YYYY/` shard 组织，每个 shard 是独立的 LeRobot v3 数据集；
+episode 编号只在 shard 内唯一。转换器可直接读取完整本地数据集：每个 shard 包含
+`meta/{info.json,modality.json,tasks.parquet}`、`meta/episodes/**/*.parquet`、
+`data/chunk-*/file-*.parquet` 与 `videos/<video_key>/chunk-*/file-*.mp4`。
+episode 元数据记录逐帧表的文件索引、全局行号区间，以及每路拼接视频的文件索引与时间区间。
+
+本项目下载器 `scripts/download/hifi_umi_subset.py` 选择一个 shard，
 将其中选定的 episode 拆为：
 
 ```text

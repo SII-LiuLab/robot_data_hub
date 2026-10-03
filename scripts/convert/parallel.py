@@ -525,7 +525,7 @@ def main():
         launch.add_argument('--model-dir', type=Path, help='model directory; Galaxea expects the parent of its two model packages')
         if name == 'run':
             launch.add_argument('--workers', type=int, default=1, help='local worker count (default 1)')
-        launch.add_argument('--limit', type=int, help='first N scheduling tasks (archives for AgiBot, episodes otherwise)')
+        launch.add_argument('--limit', type=int, help='first N archives for AgiBot, first N episodes otherwise')
         launch.add_argument('--limit-episodes', type=int, help='first N candidate episodes globally, including legitimate skips')
         launch.add_argument('--robot-type', choices=('r1lite', 'r1pro'), help='Galaxea embodiment filter')
         launch.add_argument('--tcp-offset', type=float, nargs=3, help='AgiBot TCP offset in metres')

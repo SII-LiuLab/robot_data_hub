@@ -1,6 +1,6 @@
 # HiFi-UMI-2K 转换
 
-入口：`scripts/convert/hifi_umi.py`。读取本项目下载器拆出的 episode 子集，输出
+入口：`scripts/convert/hifi_umi.py`。读取本地完整 LeRobot v3 分片或本项目下载器拆出的 episode 子集，输出
 遵循[目标契约](../../contract/export-contract.md)。源字段依据见[源格式说明](source.md)。
 
 ```bash
@@ -12,9 +12,20 @@ python -m scripts.convert.hifi_umi \
 ```
 
 默认输入 `dataset/raw/HiFi-UMI-2K`，默认输出 `dataset/processed/HiFi-UMI-2K`。
-`--input-dir` 必须包含 `source/` 元数据与 `episodes/`；目前不直接读取远端或
-完整 shard 的拼接视频，也不合并不同 shard。运行需要 NumPy、PyArrow、PyAV，
+`--input-dir` 可以指向包含 `chunk-XXXX/part-YYYY/` 的完整下载根目录，也可以指向
+其中一个 `part-YYYY/`，或包含 `source/` 元数据与 `episodes/` 的子集目录。不直接读取远端数据。
+完整分片读取各自的 `meta/info.json`、`meta/modality.json`、`meta/tasks.parquet` 和
+`meta/episodes/**/*.parquet`，按元数据中的文件索引与数据范围读取逐帧表，并按六路
+视频各自的 `[from_timestamp, to_timestamp)` 截取拼接视频。从前一个关键帧开始解码，
+仅保留当前 episode 的显示帧，重新编码为 H.264（CRF 18、fast），校验时间区间与帧数。
+MP4 播放时间从零开始，输出 Parquet 时间戳仍来自原生 `timestamp`，不从视频 FPS 推算。
+完整数据输出 ID 为 `chunk_XXXX_part_YYYY_episode_NNNNNN`，避免分片内重复编号；子集沿用 `episode_NNNNNN`。
+运行需要 NumPy、PyArrow、PyAV，
 无需机器人模型、GPU 或额外 ffmpeg 命令行程序。
+
+服务器上的完整数据集建议使用[并行转换入口](../../tools/parallel-conversion.md)。按 shard
+分配 worker，逐 episode 提交与恢复；每个 worker 只缓存当前 shard 的一个数据文件所需列，
+六路视频逐路处理，避免为每集重复读取整个 shard 的 Parquet。
 
 ## 位姿和夹爪
 

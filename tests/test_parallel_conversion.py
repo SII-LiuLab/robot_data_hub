@@ -22,7 +22,7 @@ import pyarrow.parquet as pq
 
 from scripts.convert import abc130k, agibotworld2026, export_common, parallel
 from scripts.convert.parallel_adapters import Adapter, make_config
-from test_convert_hifi_umi import make_source as hifi_source
+from test_convert_hifi_umi import make_source as hifi_source, make_shard as hifi_shard
 from test_convert_molmoact2 import make_source as molmo_source
 import test_convert_galaxea as galaxea_tests
 
@@ -42,6 +42,67 @@ def add_hifi_episode(source, index):
 
 def manifest(output):
     return [json.loads(line) for line in (output / 'episodes.jsonl').read_text().splitlines()]
+
+
+class HifiShardTests(unittest.TestCase):
+    def test_full_shard_resume_keeps_committed_episodes_after_video_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / 'raw', root / 'out'
+            hifi_shard(source)
+            hifi_shard(source, chunk=1)
+            config = make_config('hifi_umi', source)
+            store = parallel.prepare(config, output)
+            self.assertEqual(len(store.plan['tasks']), 2)
+            self.assertEqual(len(store.ids), 4)
+            from scripts.convert import hifi_umi
+            extract = hifi_umi.extract_video_segment
+
+            def interrupted(video, *args):
+                if video['from_timestamp'] > 0:
+                    raise ValueError('transient decode error')
+                return extract(video, *args)
+
+            with patch.object(hifi_umi, 'extract_video_segment', side_effect=interrupted):
+                self.assertEqual(parallel.worker(output, 0, 2), 1)
+            self.assertEqual(parallel.worker(output, 1, 2), 0)
+            committed = 'chunk_0000_part_0000_episode_000007'
+            self.assertIsNotNone(store.state(committed))
+            self.assertIsNone(store.state('chunk_0000_part_0000_episode_000008'))
+            self.assertFalse(any((store.work / 'staging').iterdir()))
+            parallel.prepare(config, output)
+            self.assertIsNotNone(store.state(committed))
+            self.assertEqual(len(store.audit()[0]), 3)
+            converted = []
+            convert = hifi_umi.ShardReader.convert_episode
+
+            def resumed(reader, index, *args):
+                converted.append(index)
+                return convert(reader, index, *args)
+
+            with patch.object(hifi_umi.ShardReader, 'convert_episode', resumed):
+                self.assertEqual(parallel.worker(output, 0, 1), 0)
+            self.assertEqual(converted, [8])
+            parallel.finalize(output)
+            self.assertEqual(len(manifest(output)), 4)
+
+    def test_shard_workers_publish_and_resume_with_global_episode_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            hifi_shard(root / 'raw')
+            hifi_shard(root / 'raw', chunk=1)
+            config = make_config('hifi_umi', root / 'raw', limit_episodes=3)
+            store = parallel.prepare(config, root / 'out')
+            self.assertEqual([len(t['episode_ids']) for t in store.plan['tasks']], [2, 1])
+            for rank in range(2):
+                self.assertEqual(parallel.worker(root / 'out', rank, 2), 0)
+            parallel.finalize(root / 'out')
+            self.assertEqual(len(manifest(root / 'out')), 3)
+            self.assertEqual(len({r['episode_id'] for r in manifest(root / 'out')}), 3)
+            parallel.prepare(config, root / 'out')
+            with patch.object(Adapter, 'shard', side_effect=AssertionError('must skip published episodes')):
+                self.assertEqual(parallel.worker(root / 'out', 0, 1), 0)
+            parallel.finalize(root / 'out')
 
 
 class ResumeTests(unittest.TestCase):

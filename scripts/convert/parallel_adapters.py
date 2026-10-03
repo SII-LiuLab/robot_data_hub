@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import re
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -97,6 +98,23 @@ def discover(config, progress=_no_progress):
         for path in sorted(found)[:task_limit]:
             tasks.append({'source': str(path.parent), 'episode_ids': [path.parent.name],
                           'inputs': [str(path), str(path.parent / 'annotation.mcap')]})
+    elif dataset == 'hifi_umi' and not (source / 'source').is_dir():
+        shards = m.discover_shards(source)
+        remaining = task_limit
+        with progress('Indexing HiFi-UMI shards', len(shards), unit='shard') as bar:
+            for shard in shards:
+                reader = m.ShardReader(shard)
+                indices = sorted(reader.episodes)[:remaining]
+                if indices:
+                    shared.extend(shard / 'meta' / name for name in ('info.json', 'modality.json', 'tasks.parquet'))
+                    tasks.append({'source': str(shard), 'layout': 'lerobot_v3_shard',
+                                  'episode_ids': [m.shard_episode_id(shard, i) for i in indices],
+                                  'inputs': [str(p) for p in reader.inputs(indices)]})
+                bar.update()
+                if remaining is not None:
+                    remaining -= len(indices)
+                    if remaining == 0:
+                        break
     elif dataset in ('molmoact2', 'hifi_umi'):
         meta = source / ('source/meta' if dataset == 'molmoact2' else 'source')
         info = load_json(meta / 'info.json')
@@ -213,6 +231,8 @@ class Adapter:
     def process(self, task, pending, staging, store, failed):
         if self.config['dataset'] == 'agibotworld2026':
             return self.archive(task, pending, staging, store, failed)
+        if self.config['dataset'] == 'hifi_umi' and task.get('layout') == 'lerobot_v3_shard':
+            return self.shard(task, pending, staging, store, failed)
         episode_id = pending[0]
         destination = staging / episode_id
         record = self.episode(task, destination)
@@ -220,6 +240,21 @@ class Adapter:
             store.skip(episode_id, 'Galaxea chassis commands do not meet the stationary selection rule')
         else:
             store.commit(episode_id, destination, record)
+
+    def shard(self, task, pending, staging, store, failed):
+        source = Path(task['source'])
+        reader = self.m.ShardReader(source)
+        indices = {self.m.shard_episode_id(source, i): i for i in reader.episodes}
+        params = self.config['params']
+        for episode_id in pending:
+            with tempfile.TemporaryDirectory(prefix='episode-', dir=staging) as temporary:
+                destination = Path(temporary) / episode_id
+                try:
+                    record = reader.convert_episode(indices[episode_id], destination,
+                                                    params['gripper_closed_rad'], params['gripper_open_rad'])
+                    store.commit(episode_id, destination, record)
+                except Exception as exc:
+                    failed(episode_id, exc)
 
     def archive(self, task, pending, staging, store, failed):
         fk = self.context('fk', lambda: self.m.G2FK(Path(self.config['model_dir']),

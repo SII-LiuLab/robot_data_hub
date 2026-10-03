@@ -1,5 +1,7 @@
 import json
+from fractions import Fraction
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -74,7 +76,123 @@ def make_source(root, frames=4):
     return episode
 
 
+def make_shard(root, chunk=0, part=0, video_frames=8):
+    """Two episodes sharing frame/video files, with a cut between keyframes."""
+    shard = root / f'chunk-{chunk:04d}' / f'part-{part:04d}'
+    with tempfile.TemporaryDirectory() as directory:
+        subset = Path(directory)
+        episode = make_source(subset)
+        shutil.copytree(subset / 'source', shard / 'meta')
+        info = json.loads((shard / 'meta/info.json').read_text())
+        info.update(fps=25., total_episodes=2,
+                    data_path='data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet',
+                    video_path='videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4')
+        (shard / 'meta/info.json').write_text(json.dumps(info))
+        first = pq.read_table(episode / 'data.parquet')
+        second = first.set_column(first.schema.get_field_index('episode_index'), 'episode_index', pa.array([8] * 4))
+        second = second.set_column(second.schema.get_field_index('index'), 'index', pa.array([104, 105, 106, 107]))
+        data = shard / 'data/chunk-002/file-003.parquet'
+        data.parent.mkdir(parents=True)
+        pq.write_table(pa.concat_tables([first, second]), data, row_group_size=5)
+        for number, index in enumerate((7, 8)):
+            row = {'episode_index': index, 'length': 4, 'dataset_from_index': 100 + number * 4,
+                   'dataset_to_index': 104 + number * 4, 'tasks': ['拿起杯子', 'Put down'],
+                   'data/chunk_index': 2, 'data/file_index': 3}
+            for key in script.CAMERAS:
+                row.update({f'videos/{key}/chunk_index': 2, f'videos/{key}/file_index': 3,
+                            f'videos/{key}/from_timestamp': number * .16,
+                            f'videos/{key}/to_timestamp': (number + 1) * .16})
+            metadata = shard / f'meta/episodes/chunk-{number:03d}/file-000.parquet'
+            metadata.parent.mkdir(parents=True)
+            pq.write_table(pa.Table.from_pylist([row]), metadata)
+        original = None
+        for key in script.CAMERAS:
+            video = shard / f'videos/{key}/chunk-002/file-003.mp4'
+            video.parent.mkdir(parents=True)
+            if original is not None:
+                shutil.copyfile(original, video)
+                continue
+            original = video
+            with av.open(str(video), 'w') as output:
+                stream = output.add_stream('libx264', rate=25)
+                stream.width = stream.height = 32
+                stream.pix_fmt = 'yuv420p'
+                stream.options = {'g': '250', 'sc_threshold': '0'}
+                for i in range(video_frames):
+                    frame = av.VideoFrame.from_ndarray(np.full((32, 32, 3), i * 28, np.uint8), format='rgb24')
+                    frame.pts, frame.time_base = i, Fraction(1, 25)
+                    for packet in stream.encode(frame):
+                        output.mux(packet)
+                for packet in stream.encode():
+                    output.mux(packet)
+    return shard
+
+
 class HifiUmiTests(unittest.TestCase):
+    def test_full_shards_cut_nonkeyframe_boundaries_and_keep_unique_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for chunk, part in ((0, 0), (0, 1)):
+                make_shard(root / 'raw', chunk, part)
+            script.convert(root / 'raw', root / 'out')
+            records = [json.loads(line) for line in (root / 'out/episodes.jsonl').read_text().splitlines()]
+            self.assertEqual([r['episode_id'] for r in records], [
+                'chunk_0000_part_0000_episode_000007', 'chunk_0000_part_0000_episode_000008',
+                'chunk_0000_part_0001_episode_000007', 'chunk_0000_part_0001_episode_000008'])
+            for number, record in enumerate(records):
+                destination = root / 'out/episodes' / record['episode_id']
+                times = pq.read_table(destination / 'state/right_eef.parquet')['timestamp_ns'].to_pylist()
+                self.assertEqual(times, [script.seconds_to_ns(t) - 2_000_000_000 for t in
+                                         np.array([2., 2.031, 2.079, 2.141], dtype=np.float32)])
+                for camera in script.CAMERAS.values():
+                    path = destination / 'rgb' / f'{camera}.mp4'
+                    with av.open(str(path)) as video:
+                        self.assertEqual(len(video.streams), 1)
+                        self.assertEqual(video.streams.video[0].codec_context.name, 'h264')
+                        frames = list(video.decode(video=0))
+                    self.assertEqual(len(frames), 4)
+                    np.testing.assert_allclose([f.to_ndarray(format='rgb24').mean() for f in frames],
+                                               np.arange((number % 2) * 4, (number % 2) * 4 + 4) * 28, atol=4)
+                    self.assertEqual(pq.read_table(path.with_suffix('.parquet'))['timestamp_ns'].to_pylist(), times)
+
+    def test_shard_reader_reuses_projected_table_and_standalone_global_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shard = make_shard(root / 'raw')
+            make_shard(root / 'raw', 1)
+            reader = script.ShardReader(shard)
+            with patch.object(script.pq, 'read_table', wraps=pq.read_table) as read:
+                for index in (7, 8):
+                    reader.convert_episode(index, root / str(index), 0., script.DEFAULT_GRIPPER_OPEN_RAD)
+                self.assertEqual(read.call_count, 1)
+                self.assertEqual(read.call_args.kwargs['columns'], list(script.COLUMNS))
+            script.convert(root / 'raw', root / 'out', limit=3)
+            self.assertEqual(len((root / 'out/episodes.jsonl').read_text().splitlines()), 3)
+
+    def test_short_shard_video_does_not_publish(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_shard(root / 'raw', video_frames=7)
+            with self.assertRaisesRegex(ValueError, 'expected 4 frames, decoded 3'):
+                script.convert(root / 'raw', root / 'out')
+            self.assertFalse((root / 'out').exists())
+            self.assertFalse(list(root.glob('.out-*')))
+
+    def test_shard_metadata_rejects_duplicate_indices_and_bad_video_range(self):
+        for bad_range in (False, True):
+            with self.subTest(bad_range=bad_range), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                shard = make_shard(root)
+                path = shard / 'meta/episodes/chunk-001/file-000.parquet'
+                row = pq.read_table(path).to_pylist()[0]
+                if bad_range:
+                    row[f'videos/{next(iter(script.CAMERAS))}/to_timestamp'] += .04
+                else:
+                    row['episode_index'] = 7
+                pq.write_table(pa.Table.from_pylist([row]), path)
+                with self.assertRaises(ValueError):
+                    script.ShardReader(shard)
+
     def test_rotation_is_repacked_not_transposed_and_preserves_body_delta(self):
         # A non-axis-aligned rotation catches mistakes hidden by identity poses.
         from scripts.robot.kinematics import rpy_matrix

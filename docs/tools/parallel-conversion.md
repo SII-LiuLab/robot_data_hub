@@ -60,6 +60,10 @@ python -m scripts.convert.parallel prepare \
 
 HiFi-UMI-2K 的准备命令：
 
+输入可为服务器上的完整 `chunk-XXXX/part-YYYY/` 分片根目录，或下载器拆好的
+`source/` + `episodes/` 子集目录。完整数据按 shard 分配 worker，输出 episode ID 包含
+chunk 与 part 名称；`--limit` 和 `--limit-episodes` 均按全局排序后的 episode 数限制。
+
 ```bash
 python -m scripts.convert.parallel prepare \
   --dataset hifi_umi \
@@ -134,7 +138,8 @@ for index, task in enumerate(plan.tasks):
 
 | 数据源 | 调度单位 | resume 行为 |
 |---|---|---|
-| ABC-130K、MolmoAct2、HiFi-UMI | episode | 跳过已提交 episode |
+| ABC-130K、MolmoAct2、HiFi-UMI 子集 | episode | 跳过已提交 episode |
+| HiFi-UMI 完整分片 | shard | 全部 episode 已完成则跳过 shard；否则读取分片元数据与当前数据文件，跳过已提交 episode |
 | Galaxea | episode | 跳过已提交或已明确合法跳过的 episode |
 | AgiBotWorld2026 | archive | 全部 episode 已完成则跳过 archive；否则重新扫描，跳过已提交 episode 的转换 |
 
