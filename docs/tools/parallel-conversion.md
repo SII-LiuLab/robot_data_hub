@@ -51,6 +51,10 @@ python -m scripts.convert.parallel finalize \
 
 MolmoAct2-BimanualYAM 的准备命令：
 
+输入可为包含 `meta/`、`data/`、`videos/` 的完整原始数据根目录，也可为下载器生成的
+`source/meta/` + `episodes/` 子集。完整数据按 episode 分配 worker，并按各相机元数据区间
+将拼接 AV1 视频转换为单集 H.264，保留帧表的原生时间戳。
+
 ```bash
 python -m scripts.convert.parallel prepare \
   --dataset molmoact2 \

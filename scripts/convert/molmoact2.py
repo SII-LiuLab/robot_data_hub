@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the downloaded MolmoAct2-BimanualYAM subset to the export contract."""
+"""Convert a local MolmoAct2-BimanualYAM LeRobot v3 dataset or episode subset."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +19,7 @@ from scripts.convert.export_common import (
     copy_h264_video, seconds_to_ns, task_instructions, write_state, write_video_index,
 )
 from scripts.robot.yam import YamFK
+from scripts.convert.lerobot_v3 import LeRobotV3Reader, extract_video_segment
 
 ROOT = Path(__file__).resolve().parents[2]
 CAMERAS = {'observation.images.top': 'top',
@@ -66,10 +67,17 @@ def load_tasks(directory):
 def read_episode(source, tasks, annotated, fk):
     metadata = json.loads((source / 'episode.json').read_text(encoding='utf-8'))
     rows = pq.read_table(source / 'data.parquet', columns=list(COLUMNS)).to_pydict()
+    index = metadata.get('episode_index')
+    if type(index) is not int or source.name != f'episode_{index:06d}':
+        raise ValueError(f'{source}: inconsistent episode identity')
+    return read_rows(source, metadata, rows, tasks, annotated, fk)
+
+
+def read_rows(source, metadata, rows, tasks, annotated, fk):
     count = len(rows['timestamp'])
     index = metadata.get('episode_index')
     start, stop = metadata.get('dataset_from_index'), metadata.get('dataset_to_index')
-    if (type(index) is not int or index < 0 or source.name != f'episode_{index:06d}'
+    if (type(index) is not int or index < 0
             or type(start) is not int or type(stop) is not int or start < 0
             or count == 0 or metadata.get('length') != count or stop - start != count
             or any(i != index for i in rows['episode_index'])):
@@ -100,6 +108,12 @@ def read_episode(source, tasks, annotated, fk):
 
 def convert_episode(source, destination, tasks, annotated, fk):
     times, streams, annotation = read_episode(source, tasks, annotated, fk)
+    return write_episode(source.name, destination, times, streams, annotation,
+                         lambda key, target: copy_h264_video(
+                             source / 'videos' / f'{key}.mp4', target, len(times)))
+
+
+def write_episode(episode_id, destination, times, streams, annotation, video):
     # This source supplies one shared timestamp per recorded observation row.
     # The segmented videos preserve that row order; container PTS are irrelevant.
     for name, values in streams.items():
@@ -108,10 +122,31 @@ def convert_episode(source, destination, tasks, annotated, fk):
     for key, camera in CAMERAS.items():
         print(f'  {camera}', flush=True)
         target = destination / 'rgb' / camera
-        copy_h264_video(source / 'videos' / f'{key}.mp4', target.with_suffix('.mp4'), len(times))
+        video(key, target.with_suffix('.mp4'))
         write_video_index(target.with_suffix('.parquet'), times, times[0])
-    return {'episode_id': source.name, 'cameras': sorted(CAMERAS.values()),
+    return {'episode_id': episode_id, 'cameras': sorted(CAMERAS.values()),
             'instructions': annotation}
+
+
+class DatasetReader(LeRobotV3Reader):
+    def __init__(self, source):
+        # Validate decoded segment lengths per episode: a bad source range must
+        # not prevent preparing or converting the rest of the full dataset.
+        super().__init__(source, CAMERAS, COLUMNS, validate_source, check_video_length=False)
+        self.tasks, self.annotated = load_tasks(source / 'meta')
+
+    def convert_episode(self, index, destination, fk):
+        row = self.episodes[index]
+        for key, video in row['videos'].items():
+            frames = (video['to_timestamp'] - video['from_timestamp']) * self.fps
+            if abs(frames - row['length']) > .01:
+                raise ValueError(f'{self.source}: episode {index} {key} video range implies '
+                                 f'{frames:g} frames; expected {row["length"]}')
+        rows = self.read_rows(index)
+        times, streams, annotation = read_rows(self.source, row, rows, self.tasks, self.annotated, fk)
+        return write_episode(f'episode_{index:06d}', destination, times, streams, annotation,
+                             lambda key, target: extract_video_segment(
+                                 row['videos'][key], target, len(times), self.fps))
 
 
 def convert(source, output, model_dir=ROOT / 'assets/robot_models/yam', *, limit=None):
@@ -119,6 +154,8 @@ def convert(source, output, model_dir=ROOT / 'assets/robot_models/yam', *, limit
         raise ValueError('limit must be a positive integer')
     if output.exists():
         raise ValueError(f'Output already exists; choose a new directory: {output}')
+    if not (source / 'source').is_dir():
+        return convert_dataset(source, output, model_dir, limit)
     meta = source / 'source/meta'
     validate_source(json.loads((meta / 'info.json').read_text(encoding='utf-8')))
     tasks, annotated = load_tasks(meta)
@@ -143,6 +180,26 @@ def convert(source, output, model_dir=ROOT / 'assets/robot_models/yam', *, limit
             raise ValueError(f'Output appeared during conversion: {output}')
         staged.rename(output)
     print(f'Exported {len(episodes)} episodes to {output}', flush=True)
+
+
+def convert_dataset(source, output, model_dir, limit):
+    reader = DatasetReader(source)
+    indices = sorted(reader.episodes)[:limit]
+    fk = YamFK(model_dir, arm_local=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f'.{output.name}-', dir=output.parent) as temporary:
+        staged = Path(temporary) / 'dataset'
+        staged.mkdir()
+        with (staged / 'episodes.jsonl').open('w', encoding='utf-8') as handle:
+            for number, index in enumerate(indices, 1):
+                episode_id = f'episode_{index:06d}'
+                print(f'[{number}/{len(indices)}] {episode_id}', flush=True)
+                record = reader.convert_episode(index, staged / 'episodes' / episode_id, fk)
+                handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+        if output.exists():
+            raise ValueError(f'Output appeared during conversion: {output}')
+        staged.rename(output)
+    print(f'Exported {len(indices)} episodes to {output}', flush=True)
 
 
 def main():

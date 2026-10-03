@@ -23,7 +23,7 @@ import pyarrow.parquet as pq
 from scripts.convert import abc130k, agibotworld2026, export_common, parallel
 from scripts.convert.parallel_adapters import Adapter, make_config
 from test_convert_hifi_umi import make_source as hifi_source, make_shard as hifi_shard
-from test_convert_molmoact2 import make_source as molmo_source
+from test_convert_molmoact2 import make_source as molmo_source, make_full_source as molmo_full_source
 import test_convert_galaxea as galaxea_tests
 
 
@@ -461,6 +461,65 @@ class SourceAdapterTests(unittest.TestCase):
         self.assertEqual(manifest(output), manifest(reference))
         for path in reference.rglob('*.parquet'):
             self.assertTrue(pq.read_table(path).equals(pq.read_table(output / path.relative_to(reference))))
+
+    @unittest.skipUnless('libsvtav1' in av.codecs_available, 'AV1 encoder required')
+    def test_molmo_full_dataset_resume_and_standalone_match(self):
+        from scripts.convert import molmoact2
+        source = molmo_full_source(self.root / 'raw')
+        output = self.root / 'parallel'
+        config = make_config('molmoact2', source)
+        store = parallel.prepare(config, output)
+        self.assertEqual(len(store.plan['tasks']), 3)
+        self.assertTrue(all(t['layout'] == 'lerobot_v3' and len(t['inputs']) == 4 for t in store.plan['tasks']))
+        self.assertIn(str(source / 'meta/episodes/chunk-001/file-000.parquet'),
+                      [p['path'] for p in store.plan['shared_inputs']])
+        convert = molmoact2.DatasetReader.convert_episode
+
+        def interrupted(reader, index, *args):
+            if index == 8:
+                raise ValueError('transient AV1 error')
+            return convert(reader, index, *args)
+
+        with patch.object(molmoact2.DatasetReader, 'convert_episode', interrupted):
+            self.assertEqual(parallel.worker(output, 0, 2), 0)
+            self.assertEqual(parallel.worker(output, 1, 2), 1)
+        self.assertIsNotNone(store.state('episode_000007'))
+        self.assertIsNotNone(store.state('episode_000009'))
+        self.assertIsNone(store.state('episode_000008'))
+        parallel.prepare(config, output)
+        converted = []
+
+        def resumed(reader, index, *args):
+            converted.append(index)
+            return convert(reader, index, *args)
+
+        with patch.object(molmoact2.DatasetReader, 'convert_episode', resumed):
+            self.assertEqual(parallel.worker(output, 0, 1), 0)
+        self.assertEqual(converted, [8])
+        parallel.finalize(output)
+        reference = self.root / 'standalone'
+        molmoact2.convert(source, reference)
+        self.assertEqual(manifest(output), manifest(reference))
+        for path in reference.rglob('*.parquet'):
+            self.assertTrue(pq.read_table(path).equals(pq.read_table(output / path.relative_to(reference))))
+
+    @unittest.skipUnless('libsvtav1' in av.codecs_available, 'AV1 encoder required')
+    def test_molmo_full_dataset_limits_and_bad_video_range_are_episode_local(self):
+        from scripts.convert import molmoact2
+        source = molmo_full_source(self.root / 'raw')
+        meta = source / 'meta/episodes/chunk-000/file-000.parquet'
+        rows = pq.read_table(meta).to_pylist()
+        for key in molmoact2.CAMERAS:
+            rows[0][f'videos/{key}/to_timestamp'] += .04
+        pq.write_table(pa.Table.from_pylist(rows), meta)
+        output = self.root / 'parallel'
+        config = make_config('molmoact2', source, limit=3, limit_episodes=2)
+        store = parallel.prepare(config, output)
+        self.assertEqual(store.ids, ['episode_000007', 'episode_000008'])
+        self.assertEqual(parallel.worker(output, 0, 1), 1)
+        self.assertIsNone(store.state('episode_000007'))
+        self.assertIsNotNone(store.state('episode_000008'))
+        self.assertFalse(output.exists())
 
     def test_galaxea_skip_and_both_embodiments(self):
         fixture = galaxea_tests.GalaxeaExportTests()

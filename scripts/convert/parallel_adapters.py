@@ -98,6 +98,18 @@ def discover(config, progress=_no_progress):
         for path in sorted(found)[:task_limit]:
             tasks.append({'source': str(path.parent), 'episode_ids': [path.parent.name],
                           'inputs': [str(path), str(path.parent / 'annotation.mcap')]})
+    elif dataset == 'molmoact2' and not (source / 'source').is_dir():
+        reader = m.DatasetReader(source)
+        shared = [source / 'meta' / name for name in ('info.json', 'tasks.parquet', 'tasks_annotated.parquet')]
+        shared.extend(reader.metadata_files)
+        indices = sorted(reader.episodes)[:task_limit]
+        with progress('Discovering MolmoAct2 episodes', len(indices), unit='episode') as bar:
+            for index in indices:
+                row = reader.episodes[index]
+                inputs = {row['data_path'], *(video['path'] for video in row['videos'].values())}
+                tasks.append({'source': str(source), 'layout': 'lerobot_v3', 'index': index,
+                              'episode_ids': [f'episode_{index:06d}'], 'inputs': sorted(inputs)})
+                bar.update()
     elif dataset == 'hifi_umi' and not (source / 'source').is_dir():
         shards = m.discover_shards(source)
         remaining = task_limit
@@ -215,6 +227,9 @@ class Adapter:
             fk = self.context('fk', lambda: m.YamFK(model, **({'arm_local': True} if dataset == 'molmoact2' else {})))
             if dataset == 'abc130k':
                 return m.convert_episode(source, destination, fk)
+            if task.get('layout') == 'lerobot_v3':
+                reader = self.context('lerobot_v3', lambda: m.DatasetReader(Path(config['source'])))
+                return reader.convert_episode(task['index'], destination, fk)
             tasks, annotated = self.context('tasks', lambda: m.load_tasks(Path(config['source']) / 'source/meta'))
             return m.convert_episode(source, destination, tasks, annotated, fk)
         if dataset == 'hifi_umi':

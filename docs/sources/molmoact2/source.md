@@ -9,6 +9,7 @@
 合并后的 LeRobot v3.0 数据集，`robot_type = bi_yam_follower`。
 原仓库的 `data/chunk-*/file-*.parquet` 和各相机 MP4 可容纳多条 episode。
 `meta/episodes/` 记录 episode 的数据索引范围及各视频内的片段边界。
+转换器可直接读取这个完整本地布局，无需先用下载器拆分 episode。
 
 本项目 `scripts/download/molmoact2_subset.py` 的下载产物为：
 
