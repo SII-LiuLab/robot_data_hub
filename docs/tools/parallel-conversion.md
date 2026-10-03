@@ -29,17 +29,12 @@ python -m scripts.convert.parallel prepare \
   --output-dir dataset/export/ABC-130K
 ```
 
-**第 2 步：`worker`，由 `srun` 一次拉起全部 worker。** 
+**第 2 步：`worker`，由 `srun` 一次拉起全部 worker。**
 
 ```bash
-mkdir -p dataset/export/ABC-130K.work/logs
-srun --output='dataset/export/ABC-130K.work/logs/slurm-%J-%t.out' \
-  --error='dataset/export/ABC-130K.work/logs/slurm-%J-%t.err' \
-  python -u -X faulthandler -m scripts.convert.parallel worker \
+srun python -m scripts.convert.parallel worker \
   --output-dir dataset/export/ABC-130K
 ```
-
-保留原有 `srun` 资源参数；`%J` 是 job/step ID，`%t` 是 task ID，避免多个 worker 共写一个文件。日志目录必须提前建立且所有节点可访问。`srun` 默认不会单独生成 `.err`；若未显式设置 `--error`，stderr 会随标准输出走，使用 `sbatch` 时通常在 `slurm-<jobid>.out` 中。启动器自身的报错仍在调用 `srun` 的终端或批处理日志里。参见 [srun 输出选项](https://slurm.schedmd.com/srun.html)。
 
 **第 3 步：`finalize`，单独运行一次（单进程）。**
 
@@ -53,6 +48,15 @@ python -m scripts.convert.parallel finalize \
 各节点须能访问同一仓库、Python 环境、源数据和输出盘。上次所有 worker 退出后，重新执行这三步即可 resume；可更改 `srun` 的 worker 数。三个阶段都支持对已发布结果重复执行，不重新转换数据。单机 `run --workers N` 只是本地便利入口，不用于 Slurm。
 
 `--dataset` 支持 `abc130k`、`molmoact2`、`hifi_umi`、`galaxea`、`agibotworld2026`。`--model-dir` 默认为仓库中对应的模型；Galaxea 的该参数指向包含两个本体模型包的父目录。
+
+AgiBot World 2026 模仿学习数据的准备命令：
+
+```bash
+python -m scripts.convert.parallel prepare \
+  --dataset agibotworld2026 \
+  --input-dir dataset/raw/AgiBotWorld2026/ImitationLearning \
+  --output-dir dataset/export/AgiBotWorld2026
+```
 
 抽样参数在首次准备时固定，resume 不能更改：
 
